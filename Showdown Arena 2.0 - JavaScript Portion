@@ -1,0 +1,717 @@
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const player1HealthEl = document.getElementById('player1Health');
+const player2HealthEl = document.getElementById('player2Health');
+const restartButton = document.getElementById('restartButton');
+
+const GAME_WIDTH = canvas.width;
+const GAME_HEIGHT = canvas.height;
+
+const gravity = 0.6;
+const friction = 0.82;
+const stageHeight = 56;
+const groundY = GAME_HEIGHT - stageHeight;
+
+const platforms = [
+  { x: 160, y: groundY - 120, width: 180, height: 16 },
+  { x: 560, y: groundY - 170, width: 160, height: 16 },
+  { x: 360, y: groundY - 70, width: 140, height: 16 },
+];
+
+const keys = {
+  ArrowLeft: false,
+  ArrowRight: false,
+  ArrowUp: false,
+  ArrowDown: false,
+  KeyA: false,
+  KeyD: false,
+  KeyW: false,
+  KeyS: false,
+};
+
+const stage = {
+  x: 0,
+  y: groundY,
+  width: GAME_WIDTH,
+  height: stageHeight,
+};
+
+const hitEffects = [];
+
+class Fighter {
+  constructor(x, y, color, controls) {
+    this.startX = x;
+    this.startY = y;
+    this.x = x;
+    this.y = y;
+    this.width = 28;
+    this.height = 44;
+    this.color = color;
+    this.velocity = { x: 0, y: 0 };
+    this.attackCooldown = 0;
+    this.attackTimer = 0;
+    this.hasHit = false;
+    this.jumpHeld = false;
+    this.jumpApexY = null;
+    this.hasStartedJumpDescend = false;
+    this.controls = controls;
+    this.facing = 1;
+    this.attackDuration = 30;
+    this.initParts();
+  }
+  
+  // initialize body parts with max and current health
+  initParts() {
+    this.parts = {
+      head: { max: 30, cur: 30 },
+      torso: { max: 60, cur: 60 },
+      leftArm: { max: 40, cur: 40 },
+      rightArm: { max: 40, cur: 40 },
+      leftLeg: { max: 40, cur: 40 },
+      rightLeg: { max: 40, cur: 40 },
+    };
+    this.dead = false;
+  }
+
+  reset() {
+    this.x = this.startX;
+    this.y = this.startY;
+    this.velocity = { x: 0, y: 0 };
+    
+    this.attackCooldown = 0;
+    this.attackTimer = 0;
+    this.hasHit = false;
+    this.jumpHeld = false;
+    this.jumpApexY = null;
+    this.hasStartedJumpDescend = false;
+    this.initParts();
+  }
+
+  totalHealth() {
+    return Object.values(this.parts).reduce((s, p) => s + p.cur, 0);
+  }
+
+  get hitbox() {
+    return {
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+    };
+  }
+
+  get attackBox() {
+    if (this.attackTimer > 0) {
+      return {
+        x: this.x + (this.facing > 0 ? this.width : -46),
+        y: this.y + 24,
+        width: 46,
+        height: 14,
+      };
+    }
+    return null;
+  }
+
+  // compute part bounding boxes for hit detection
+  getPartBoxes() {
+    const centerX = this.x + this.width / 2;
+    const headY = this.y + 10;
+    const torsoTop = headY + 8;
+    const torsoBottom = torsoTop + 32;
+    const shoulderY = torsoTop + 4;
+    const shoulderOffset = 10;
+    const armLen = 24;
+    const legOffsetX = 8;
+    const legTop = torsoBottom;
+
+    return {
+      head: { x: centerX - 8, y: headY - 8, width: 16, height: 16, cx: centerX, cy: headY },
+      torso: { x: centerX - 11, y: torsoTop, width: 22, height: torsoBottom - torsoTop },
+      leftArm: { x: centerX - shoulderOffset - armLen, y: shoulderY - 3, width: armLen, height: 8 },
+      rightArm: { x: centerX + shoulderOffset, y: shoulderY - 3, width: armLen, height: 8 },
+      leftLeg: { x: centerX - legOffsetX - 4, y: legTop, width: 6, height: 24 },
+      rightLeg: { x: centerX + legOffsetX - 2, y: legTop, width: 6, height: 24 },
+    };
+  }
+
+  // color mapping for part health: white -> light red -> red -> dark red -> black
+  getPartColor(part) {
+    const p = this.parts[part];
+    if (!p) return '#ffffff';
+    const ratio = p.cur / p.max;
+    if (ratio >= 0.999) return '#ffffff';
+    if (ratio <= 0) return '#000000';
+
+    function lerpHex(a, b, t) {
+      const ah = parseInt(a.slice(1), 16);
+      const bh = parseInt(b.slice(1), 16);
+      const ar = (ah >> 16) & 0xff;
+      const ag = (ah >> 8) & 0xff;
+      const ab = ah & 0xff;
+      const br = (bh >> 16) & 0xff;
+      const bg = (bh >> 8) & 0xff;
+      const bb = bh & 0xff;
+      const rr = Math.round(ar + (br - ar) * t);
+      const rg = Math.round(ag + (bg - ag) * t);
+      const rb = Math.round(ab + (bb - ab) * t);
+      return '#' + ((1 << 24) + (rr << 16) + (rg << 8) + rb).toString(16).slice(1);
+    }
+
+    if (ratio > 0.66) {
+      return lerpHex('#ffffff', '#ffd6d6', (0.99 - ratio) / 0.33);
+    } else if (ratio > 0.33) {
+      return lerpHex('#ffd6d6', '#cc4d4d', (0.66 - ratio) / 0.33);
+    } else {
+      return lerpHex('#cc4d4d', '#000000', (0.33 - ratio) / 0.33);
+    }
+  }
+
+  applyDamageToPart(partName, dmg) {
+    const part = this.parts[partName];
+    if (!part) return;
+    if (part.cur <= 0) {
+      // distribute damage equally among other (alive) parts
+      const others = Object.keys(this.parts).filter((k) => k !== partName && this.parts[k].cur > 0);
+      if (others.length === 0) return;
+      const split = Math.floor(dmg / others.length);
+      let remainder = dmg - split * others.length;
+      for (const o of others) {
+        this.parts[o].cur = Math.max(0, this.parts[o].cur - split);
+        if (remainder > 0) {
+          this.parts[o].cur = Math.max(0, this.parts[o].cur - 1);
+          remainder -= 1;
+        }
+      }
+    } else {
+      part.cur = Math.max(0, part.cur - dmg);
+    }
+
+    this.checkDeath();
+  }
+
+  checkDeath() {
+    if (this.parts.head.cur <= 0 || this.parts.torso.cur <= 0) {
+      this.dead = true;
+    }
+  }
+
+  draw() {
+    // draw normal human-like sprite (head, torso, arms, legs)
+    const centerX = this.x + this.width / 2;
+    const headY = this.y + 10;
+    // head
+    ctx.fillStyle = '#f1c27d';
+    ctx.beginPath();
+    ctx.arc(centerX, headY, 8, 0, Math.PI * 2);
+    ctx.fill();
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(centerX - 5, headY - 3, 3, 3);
+    ctx.fillRect(centerX + 2, headY - 3, 3, 3);
+
+    // torso
+    const torsoW = 22;
+    const torsoH = 32;
+    const torsoX = centerX - torsoW / 2;
+    const torsoY = this.y + 18;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(torsoX, torsoY, torsoW, torsoH);
+
+    // legs
+    const legH = 24;
+    ctx.fillStyle = '#222';
+    ctx.fillRect(torsoX + 2, torsoY + torsoH, 6, legH);
+    ctx.fillRect(torsoX + torsoW - 8, torsoY + torsoH, 6, legH);
+
+    const armLength = 24;
+    const armY = torsoY + 6;
+    const shoulderX = this.facing > 0 ? torsoX + torsoW : torsoX;
+    const shoulderY = armY + 3;
+    ctx.save();
+    ctx.translate(shoulderX, shoulderY);
+    const restAngle = Math.PI * 35 / 180;
+    let angle = this.facing > 0 ? -restAngle : Math.PI + restAngle;
+    if (this.attackTimer > 0) {
+      const progress = 1 - this.attackTimer / this.attackDuration;
+      const swing = Math.PI * 50 / 180;
+      const startAngle = this.facing > 0 ? -swing : Math.PI + swing;
+      const endAngle = this.facing > 0 ? swing : Math.PI - swing;
+      angle = startAngle + (endAngle - startAngle) * progress;
+    }
+    ctx.rotate(angle);
+    ctx.fillStyle = this.color;
+    ctx.fillRect(0, -3, armLength, 6);
+    ctx.fillStyle = '#f1c27d';
+    ctx.fillRect(armLength, -3, 4, 6);
+
+    // sword attached to hand
+    const swordStart = armLength + 4;
+    // handle
+    ctx.fillStyle = '#6b4a2d';
+    ctx.fillRect(armLength - 10, -3, 10, 6);
+    // guard
+    ctx.fillStyle = '#444';
+    ctx.fillRect(armLength - 2, -6, 18, 4);
+    ctx.fillRect(armLength - 2, 2, 18, 4);
+    // blade
+    ctx.fillStyle = '#ddd';
+    ctx.beginPath();
+    ctx.moveTo(swordStart + 4, -2);
+    ctx.lineTo(swordStart + 4, -2);
+    ctx.lineTo(swordStart + 36, -2);
+    ctx.lineTo(swordStart + 44, 0);
+    ctx.lineTo(swordStart + 36, 2);
+    ctx.lineTo(swordStart + 4, 2);
+    ctx.closePath();
+    ctx.fill();
+    // fuller line
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(swordStart + 12, 0);
+    ctx.lineTo(swordStart + 34, 0);
+    ctx.stroke();
+    // pommel
+    ctx.fillStyle = '#6b4a2d';
+    ctx.fillRect(armLength - 14, -2, 4, 4);
+    ctx.restore();
+
+    if (this.attackBox) {
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      const box = this.attackBox;
+      ctx.fillRect(box.x, box.y, box.width, box.height);
+    }
+  }
+
+  // draw side HUD skeleton with per-part numeric labels at (sx, sy)
+  drawSideHUD(sx, sy) {
+    const cx = sx + (sx < GAME_WIDTH / 2 ? 38 : 32);
+    const headY = sy + 22;
+    const neckBottom = headY + 12;
+    const shoulderY = neckBottom + 8;
+    const chestBottom = shoulderY + 28;
+    const pelvisY = chestBottom + 16;
+
+    // skull
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = this.getPartColor('head');
+    ctx.beginPath();
+    ctx.arc(cx, headY, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    this.drawPartBar(cx + 14, headY + 4, 0, 0, 'head');
+
+    // neck
+    ctx.strokeStyle = '#999';
+    ctx.beginPath();
+    ctx.moveTo(cx, headY + 10);
+    ctx.lineTo(cx, neckBottom);
+    ctx.stroke();
+
+    // clavicles / shoulders
+    ctx.strokeStyle = '#888';
+    ctx.beginPath();
+    ctx.moveTo(cx - 18, shoulderY);
+    ctx.lineTo(cx + 18, shoulderY);
+    ctx.stroke();
+
+    // ribcage
+    ctx.strokeStyle = this.getPartColor('torso');
+    ctx.beginPath();
+    ctx.ellipse(cx, shoulderY + 16, 14, 22, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    this.drawPartBar(cx, shoulderY + 16, 0, 0, 'torso', 'center');
+
+    // pelvis
+    ctx.strokeStyle = '#777';
+    ctx.beginPath();
+    ctx.ellipse(cx, pelvisY, 16, 8, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // left arm
+    const leftShoulderX = cx - 16;
+    const leftShoulderY = shoulderY + 2;
+    const leftElbowX = leftShoulderX - 16;
+    const leftElbowY = leftShoulderY + 16;
+    const leftWristX = leftElbowX - 10;
+    const leftWristY = leftElbowY + 6;
+    ctx.strokeStyle = this.getPartColor('leftArm');
+    ctx.beginPath();
+    ctx.moveTo(leftShoulderX, leftShoulderY);
+    ctx.lineTo(leftElbowX, leftElbowY);
+    ctx.lineTo(leftWristX, leftWristY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('leftArm');
+    ctx.beginPath(); ctx.arc(leftShoulderX, leftShoulderY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftElbowX, leftElbowY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftWristX, leftWristY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(leftShoulderX - 18, leftShoulderY + 4, 0, 0, 'leftArm');
+
+    // right arm
+    const rightShoulderX = cx + 16;
+    const rightShoulderY = leftShoulderY;
+    const rightElbowX = rightShoulderX + 16;
+    const rightElbowY = rightShoulderY + 16;
+    const rightWristX = rightElbowX + 10;
+    const rightWristY = rightElbowY + 6;
+    ctx.strokeStyle = this.getPartColor('rightArm');
+    ctx.beginPath();
+    ctx.moveTo(rightShoulderX, rightShoulderY);
+    ctx.lineTo(rightElbowX, rightElbowY);
+    ctx.lineTo(rightWristX, rightWristY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('rightArm');
+    ctx.beginPath(); ctx.arc(rightShoulderX, rightShoulderY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightElbowX, rightElbowY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightWristX, rightWristY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(rightShoulderX + 10, rightShoulderY + 4, 0, 0, 'rightArm');
+
+    // left leg
+    const leftHipX = cx - 8;
+    const leftHipY = pelvisY + 6;
+    const leftKneeX = leftHipX - 8;
+    const leftKneeY = leftHipY + 22;
+    const leftAnkleX = leftKneeX - 6;
+    const leftAnkleY = leftKneeY + 18;
+    ctx.strokeStyle = this.getPartColor('leftLeg');
+    ctx.beginPath();
+    ctx.moveTo(leftHipX, leftHipY);
+    ctx.lineTo(leftKneeX, leftKneeY);
+    ctx.lineTo(leftAnkleX, leftAnkleY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('leftLeg');
+    ctx.beginPath(); ctx.arc(leftHipX, leftHipY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftKneeX, leftKneeY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftAnkleX, leftAnkleY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(leftKneeX - 16, leftKneeY - 4, 0, 0, 'leftLeg');
+
+    // right leg
+    const rightHipX = cx + 8;
+    const rightHipY = leftHipY;
+    const rightKneeX = rightHipX + 8;
+    const rightKneeY = leftKneeY;
+    const rightAnkleX = rightKneeX + 6;
+    const rightAnkleY = leftAnkleY;
+    ctx.strokeStyle = this.getPartColor('rightLeg');
+    ctx.beginPath();
+    ctx.moveTo(rightHipX, rightHipY);
+    ctx.lineTo(rightKneeX, rightKneeY);
+    ctx.lineTo(rightAnkleX, rightAnkleY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('rightLeg');
+    ctx.beginPath(); ctx.arc(rightHipX, rightHipY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightKneeX, rightKneeY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightAnkleX, rightAnkleY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(rightKneeX + 10, rightKneeY - 4, 0, 0, 'rightLeg');
+  }
+
+  drawPartBar(x, y, w, h, partName, align = 'left') {
+    const p = this.parts[partName];
+    if (!p) return;
+    const label = `${p.cur}`;
+    ctx.font = '12px Inter, sans-serif';
+    ctx.fillStyle = this.getPartColor(partName);
+    ctx.textAlign = align;
+    ctx.fillText(label, x, y);
+  }
+
+  update() {
+    if (this.dead) {
+      this.velocity.x = 0;
+      if (this.attackTimer > 0) this.attackTimer -= 1;
+      if (this.attackCooldown > 0) this.attackCooldown -= 1;
+      return;
+    }
+
+    const controls = this.controls;
+    if (keys[controls.left]) {
+      this.velocity.x = Math.max(this.velocity.x - 0.4, -3.0);
+      this.facing = -1;
+    } else if (keys[controls.right]) {
+      this.velocity.x = Math.min(this.velocity.x + 0.4, 3.0);
+      this.facing = 1;
+    } else {
+      this.velocity.x *= friction;
+    }
+
+    if (keys[controls.jump] && this.onGround() && !this.jumpHeld) {
+      this.velocity.y = -18;
+      this.jumpHeld = true;
+      this.jumpApexY = this.y;
+      this.hasStartedJumpDescend = false;
+    }
+
+    if (!keys[controls.jump]) {
+      this.jumpHeld = false;
+    }
+
+    if (this.jumpApexY !== null) {
+      if (this.velocity.y < 0) {
+        this.jumpApexY = Math.min(this.jumpApexY, this.y);
+      } else if (this.velocity.y >= 0 && !this.onGround()) {
+        this.hasStartedJumpDescend = true;
+      }
+    }
+
+    if (keys[controls.attack] && this.attackCooldown <= 0) {
+      this.attackTimer = this.attackDuration;
+      this.attackCooldown = 42;
+      this.hasHit = false;
+    }
+
+    this.velocity.y += gravity;
+    const previousX = this.x;
+    const previousY = this.y;
+    this.x += this.velocity.x;
+    this.y += this.velocity.y;
+
+    if (this.x < 0) this.x = 0;
+    if (this.x + this.width > GAME_WIDTH) this.x = GAME_WIDTH - this.width;
+
+    let landedOnPlatform = false;
+    for (const platform of platforms) {
+      const overlapsX = this.x + this.width > platform.x && this.x < platform.x + platform.width;
+      const overlapsPreviousX = previousX + this.width > platform.x && previousX < platform.x + platform.width;
+      if (!overlapsX && !overlapsPreviousX) continue;
+
+      const previousBottom = previousY + this.height;
+      const currentBottom = this.y + this.height;
+      const previousTop = previousY;
+      const currentTop = this.y;
+
+      if (previousBottom <= platform.y && currentBottom >= platform.y && this.velocity.y >= 0) {
+        this.y = platform.y - this.height;
+        this.velocity.y = 0;
+        this.jumpApexY = null;
+        this.hasStartedJumpDescend = false;
+        landedOnPlatform = true;
+        break;
+      }
+
+      if (previousTop >= platform.y + platform.height && currentTop <= platform.y + platform.height && this.velocity.y < 0) {
+        this.y = platform.y + platform.height;
+        this.velocity.y = 0;
+        break;
+      }
+    }
+
+    if (!landedOnPlatform && this.y + this.height >= groundY) {
+      this.y = groundY - this.height;
+      this.velocity.y = 0;
+      this.jumpApexY = null;
+      this.hasStartedJumpDescend = false;
+    }
+
+    if (this.attackTimer > 0) {
+      this.attackTimer -= 1;
+    }
+
+    if (this.attackCooldown > 0) {
+      this.attackCooldown -= 1;
+    }
+  }
+
+  onGround() {
+    const onPlatform = platforms.some((platform) => {
+      return (
+        this.y + this.height >= platform.y - 0.5 &&
+        this.y + this.height <= platform.y + 0.5 &&
+        this.x + this.width > platform.x &&
+        this.x < platform.x + platform.width
+      );
+    });
+    return this.y + this.height >= groundY - 0.5 || onPlatform;
+  }
+
+  isCriticalHit() {
+    if (this.jumpApexY === null || !this.hasStartedJumpDescend || this.onGround()) {
+      return false;
+    }
+    const fallMidpoint = this.jumpApexY + (groundY - this.jumpApexY) / 2;
+    return this.y > fallMidpoint;
+  }
+}
+
+const player1 = new Fighter(120, groundY - 44, '#4ea6ff', {
+  left: 'KeyA',
+  right: 'KeyD',
+  jump: 'KeyW',
+  attack: 'KeyS',
+});
+
+const player2 = new Fighter(760, groundY - 44, '#ff906d', {
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+  jump: 'ArrowUp',
+  attack: 'ArrowDown',
+});
+
+function rectIntersect(a, b) {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+function updateGame() {
+  player1.update();
+  player2.update();
+  detectAttacks();
+  updateHealthUI();
+}
+
+function normalizeArmHit(hitPart) {
+  if (hitPart === 'leftArm' || hitPart === 'rightArm') {
+    return Math.random() < 0.5 ? 'leftArm' : 'rightArm';
+  }
+  return hitPart;
+}
+
+function detectAttacks() {
+  if (player1.dead || player2.dead) return;
+  const p1Attack = player1.attackBox;
+  const p2Attack = player2.attackBox;
+  if (
+    p1Attack &&
+    rectIntersect(p1Attack, player2.hitbox) &&
+    player1.attackTimer > 6 &&
+    !player1.hasHit
+  ) {
+    const isCrit = player1.isCriticalHit();
+    const damage = isCrit ? 10 : 5;
+    // find which part was hit
+    const parts = player2.getPartBoxes();
+    let hitPart = null;
+    const order = ['torso', 'head', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+    for (const name of order) {
+      const box = parts[name];
+      if (rectIntersect(p1Attack, box)) {
+        hitPart = name;
+        break;
+      }
+    }
+    if (!hitPart) hitPart = 'torso';
+    hitPart = normalizeArmHit(hitPart);
+    player2.applyDamageToPart(hitPart, damage);
+    player2.velocity.x = (isCrit ? 16 : 12) * player1.facing;
+    player2.velocity.y = isCrit ? -12 : -10;
+    player1.hasHit = true;
+    const bx = parts[hitPart];
+    hitEffects.push({ x: (bx.x + (bx.width || 0) / 2) || bx.cx, y: (bx.y + (bx.height || 0) / 2) || bx.cy, timer: isCrit ? 30 : 18, color: isCrit ? 'gold' : 'white' });
+  }
+
+  if (
+    p2Attack &&
+    rectIntersect(p2Attack, player1.hitbox) &&
+    player2.attackTimer > 6 &&
+    !player2.hasHit
+  ) {
+    const isCrit = player2.isCriticalHit();
+    const damage = isCrit ? 10 : 5;
+    const parts = player1.getPartBoxes();
+    let hitPart = null;
+    const order = ['torso', 'head', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+    for (const name of order) {
+      const box = parts[name];
+      if (rectIntersect(p2Attack, box)) {
+        hitPart = name;
+        break;
+      }
+    }
+    if (!hitPart) hitPart = 'torso';
+    hitPart = normalizeArmHit(hitPart);
+    player1.applyDamageToPart(hitPart, damage);
+    player1.velocity.x = (isCrit ? 16 : 12) * player2.facing;
+    player1.velocity.y = isCrit ? -12 : -10;
+    player2.hasHit = true;
+    const bx = parts[hitPart];
+    hitEffects.push({ x: (bx.x + (bx.width || 0) / 2) || bx.cx, y: (bx.y + (bx.height || 0) / 2) || bx.cy, timer: isCrit ? 30 : 18, color: isCrit ? 'gold' : 'white' });
+  }
+}
+
+function updateHealthUI() {
+  player1HealthEl.textContent = `Player 1 Health: ${player1.totalHealth()}`;
+  player2HealthEl.textContent = `Player 2 Health: ${player2.totalHealth()}`;
+}
+
+function drawStage() {
+  ctx.fillStyle = '#18222d';
+  ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  ctx.fillStyle = '#2a394a';
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
+
+  ctx.fillStyle = '#3d4f5f';
+  for (const platform of platforms) {
+    ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+    ctx.fillStyle = '#5d7d94';
+    ctx.fillRect(platform.x, platform.y, platform.width, 4);
+    ctx.fillStyle = '#3d4f5f';
+  }
+}
+
+function draw() {
+  drawStage();
+  player1.draw();
+  player2.draw();
+
+  // side HUDs showing skeletal part healths
+  player1.drawSideHUD(12, 12);
+  player2.drawSideHUD(GAME_WIDTH - 140, 12);
+
+  // draw hit effects
+  for (let i = hitEffects.length - 1; i >= 0; i--) {
+    const e = hitEffects[i];
+    const base = 30;
+    const alpha = Math.max(0, e.timer / base);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, (base - e.timer) * 0.7 + 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    e.timer -= 1;
+    if (e.timer <= 0) hitEffects.splice(i, 1);
+  }
+
+  if (player1.dead || player2.dead) {
+    const winner = player1.dead && !player2.dead ? 'Player 2' : player2.dead && !player1.dead ? 'Player 1' : 'Nobody';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
+    ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+    ctx.fillStyle = '#fff';
+    ctx.font = '46px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${winner} Wins!`, GAME_WIDTH / 2, GAME_HEIGHT / 2);
+    ctx.font = '18px Inter, sans-serif';
+    ctx.fillText('Press Restart to play again', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40);
+  }
+}
+
+function loop() {
+  updateGame();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('keydown', (event) => {
+  if (keys.hasOwnProperty(event.code)) {
+    keys[event.code] = true;
+    event.preventDefault();
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (keys.hasOwnProperty(event.code)) {
+    keys[event.code] = false;
+    event.preventDefault();
+  }
+});
+
+restartButton.addEventListener('click', () => {
+  player1.reset();
+  player2.reset();
+  updateHealthUI();
+});
+
+updateHealthUI();
+requestAnimationFrame(loop);
