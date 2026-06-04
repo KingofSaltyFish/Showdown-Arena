@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Platform Fighter Template</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="game-shell">
+    <h1>Platform Fighter</h1>
+    <div class="instructions">
+      <div>Player 1: A / D to move, W to jump, S to attack</div>
+      <div>Player 2: ← / → to move, ↑ to jump, ↓ to attack</div>
+    </div>
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+    <div class="status-bar">
+      <div id="player1Health">Player 1 Health: 100</div>
+      <div id="player2Health">Player 2 Health: 100</div>
+    </div>
+    <button id="restartButton">Restart</button>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
