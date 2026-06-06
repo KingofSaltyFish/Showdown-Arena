@@ -1,0 +1,1553 @@
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const player1HealthEl = document.getElementById('player1Health');
+const player2HealthEl = document.getElementById('player2Health');
+const restartButton = document.getElementById('restartButton');
+const startScreen = document.getElementById('startScreen');
+const playButton = document.getElementById('playButton');
+const statusBar = document.querySelector('.status-bar');
+const instructions = document.querySelector('.instructions');
+
+const GAME_WIDTH = canvas.width;
+const GAME_HEIGHT = canvas.height;
+
+const gravity = 0.6;
+const friction = 0.82;
+const stageHeight = 56;
+const groundY = GAME_HEIGHT - stageHeight;
+
+let platforms = [
+  { x: 160, y: groundY - 120, width: 180, height: 16 },
+  { x: 560, y: groundY - 170, width: 160, height: 16 },
+  { x: 360, y: groundY - 70, width: 140, height: 16 },
+];
+
+const keys = {
+  ArrowLeft: false,
+  ArrowRight: false,
+  ArrowUp: false,
+  ArrowDown: false,
+  KeyA: false,
+  KeyD: false,
+  KeyW: false,
+  KeyS: false,
+  Slash: false,
+  Period: false,
+  KeyQ: false,
+  KeyR: false,
+};
+
+const stage = {
+  x: 0,
+  y: groundY,
+  width: GAME_WIDTH,
+  height: stageHeight,
+};
+
+const hitEffects = [];
+
+const characterTypes = {
+  swordMaster: {
+    name: 'The Sword Master',
+    damageModifier: 1,
+    armorModifier: 1,
+  },
+  armoredKnight: {
+    name: 'The Armored Knight',
+    damageModifier: 0.5,
+    armorModifier: 0.5,
+  },
+  deadlySniper: {
+    name: 'The Deadly Sniper',
+    damageModifier: 1,
+    armorModifier: 1,
+  },
+  stealthyBandit: {
+    name: 'The Stealthy Bandit',
+    damageModifier: 0.75,
+    armorModifier: 1,
+  },
+};
+
+const player1CharacterSelect = document.getElementById('player1Character');
+const player2CharacterSelect = document.getElementById('player2Character');
+
+const player1Controls = {
+  left: 'KeyA',
+  right: 'KeyD',
+  jump: 'KeyW',
+  attack: 'KeyS',
+  ability: 'KeyQ',
+  secondary: 'KeyR',
+};
+
+const player2Controls = {
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+  jump: 'ArrowUp',
+  attack: 'ArrowDown',
+  ability: 'Slash',
+  secondary: 'Period',
+};
+
+let player1 = null;
+let player2 = null;
+const bombs = [];
+
+function getFighterHeight(characterTypeKey) {
+  return characterTypeKey === 'armoredKnight' ? 91 : 74;
+}
+
+function getPartHealthConfig(characterTypeKey) {
+  if (characterTypeKey === 'armoredKnight') {
+    return {
+      head: 35,
+      torso: 70,
+      limbs: 45,
+    };
+  }
+
+  if (characterTypeKey === 'deadlySniper') {
+    return {
+      head: 15,
+      torso: 30,
+      limbs: 20,
+    };
+  }
+
+  if (characterTypeKey === 'stealthyBandit') {
+    return {
+      head: 20,
+      torso: 40,
+      limbs: 25,
+    };
+  }
+
+  return {
+    head: 25,
+    torso: 50,
+    limbs: 35,
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function formatHealth(value) {
+  return Number.isInteger(value) ? `${value}` : value.toFixed(1);
+}
+
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function generatePlatforms() {
+  const nextPlatforms = [];
+  const targetCount = 3;
+  let attempts = 0;
+
+  while (nextPlatforms.length < targetCount && attempts < 120) {
+    attempts += 1;
+    const width = Math.round(randomBetween(135, 205));
+    const height = 16;
+    const x = Math.round(randomBetween(80, GAME_WIDTH - width - 80));
+    const y = Math.round(randomBetween(groundY - 185, groundY - 70));
+    const candidate = { x, y, width, height };
+    const overlaps = nextPlatforms.some((platform) => {
+      const horizontalGap = 55;
+      const verticalGap = 34;
+      return (
+        candidate.x < platform.x + platform.width + horizontalGap &&
+        candidate.x + candidate.width + horizontalGap > platform.x &&
+        candidate.y < platform.y + platform.height + verticalGap &&
+        candidate.y + candidate.height + verticalGap > platform.y
+      );
+    });
+
+    if (!overlaps) {
+      nextPlatforms.push(candidate);
+    }
+  }
+
+  while (nextPlatforms.length < targetCount) {
+    const fallbackIndex = nextPlatforms.length;
+    nextPlatforms.push({
+      x: 150 + fallbackIndex * 240,
+      y: groundY - 80 - fallbackIndex * 45,
+      width: 150,
+      height: 16,
+    });
+  }
+
+  platforms = nextPlatforms;
+}
+
+class Fighter {
+  constructor(x, y, color, controls, characterTypeKey = 'swordMaster') {
+    this.startX = x;
+    this.startY = y;
+    this.x = x;
+    this.y = y;
+    this.characterTypeKey = characterTypeKey;
+    // Armored Knight is larger
+    if (characterTypeKey === 'armoredKnight') {
+      this.width = 34;
+    } else {
+      this.width = 28;
+    }
+    this.height = getFighterHeight(characterTypeKey);
+    this.color = color;
+    this.velocity = { x: 0, y: 0 };
+    this.attackCooldown = 0;
+    this.attackTimer = 0;
+    this.hasHit = false;
+    this.jumpHeld = false;
+    this.jumpApexY = null;
+    this.hasStartedJumpDescend = false;
+    this.controls = controls;
+    this.facing = 1;
+    this.attackDuration = 30;
+    // Shield properties for Armored Knight
+    this.shieldActive = false;
+    this.shieldDirection = this.getIdleShieldDirection();
+    this.shieldHealth = 30;
+    this.shieldMaxHealth = 30;
+    this.shieldCooldown = 0;
+    this.shieldBlockDuration = 0;
+    this.shieldGuardProgress = 0;
+    this.sniperAiming = false;
+    this.sniperAim = { x: x + 160, y: y + 32 };
+    this.banditPendingAction = null;
+    this.banditWindupTimer = 0;
+    this.setCharacterType(characterTypeKey);
+    this.initParts();
+  }
+  
+  // initialize body parts with max and current health
+  initParts() {
+    const health = getPartHealthConfig(this.characterTypeKey);
+    this.parts = {
+      head: { max: health.head, cur: health.head },
+      torso: { max: health.torso, cur: health.torso },
+      leftArm: { max: health.limbs, cur: health.limbs },
+      rightArm: { max: health.limbs, cur: health.limbs },
+      leftLeg: { max: health.limbs, cur: health.limbs },
+      rightLeg: { max: health.limbs, cur: health.limbs },
+    };
+    this.dead = false;
+  }
+
+  reset() {
+    this.x = this.startX;
+    this.y = this.startY;
+    this.velocity = { x: 0, y: 0 };
+    
+    this.attackCooldown = 0;
+    this.attackTimer = 0;
+    this.hasHit = false;
+    this.jumpHeld = false;
+    this.jumpApexY = null;
+    this.hasStartedJumpDescend = false;
+    this.shieldActive = false;
+    this.shieldDirection = this.getIdleShieldDirection();
+    this.shieldHealth = 30;
+    this.shieldCooldown = 0;
+    this.shieldBlockDuration = 0;
+    this.shieldGuardProgress = 0;
+    this.sniperAiming = false;
+    this.sniperAim = { x: this.x + 160, y: this.y + 32 };
+    this.banditPendingAction = null;
+    this.banditWindupTimer = 0;
+    this.initParts();
+  }
+
+  setCharacterType(characterTypeKey) {
+    this.characterType = characterTypes[characterTypeKey] || characterTypes.swordMaster;
+    this.characterName = this.characterType.name;
+  }
+
+  totalHealth() {
+    return Object.values(this.parts).reduce((s, p) => s + p.cur, 0);
+  }
+
+  get hitbox() {
+    return {
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+    };
+  }
+
+  get attackBox() {
+    if (this.attackTimer > 0) {
+      const isArmoredKnight = this.characterTypeKey === 'armoredKnight';
+      const isDeadlySniper = this.characterTypeKey === 'deadlySniper';
+      const isStealthyBandit = this.characterTypeKey === 'stealthyBandit';
+      const weaponWidth = isDeadlySniper ? GAME_WIDTH : isArmoredKnight ? 34 : isStealthyBandit ? 34 : 46;
+      return {
+        x: this.x + (this.facing > 0 ? this.width : -weaponWidth),
+        y: this.y + (isDeadlySniper ? 30 : isArmoredKnight ? 26 : 24),
+        width: weaponWidth,
+        height: isDeadlySniper ? 6 : isArmoredKnight ? 10 : 14,
+      };
+    }
+    return null;
+  }
+
+  getIdleShieldDirection() {
+    return this.facing > 0 ? 'left' : 'right';
+  }
+
+  getFrontShieldDirection() {
+    return this.facing > 0 ? 'right' : 'left';
+  }
+
+  canActivateShieldBlock() {
+    return this.characterTypeKey === 'armoredKnight' && this.shieldHealth > 0;
+  }
+
+  activateShieldBlock(direction = this.getFrontShieldDirection()) {
+    if (!this.canActivateShieldBlock()) return;
+    this.shieldActive = true;
+    this.shieldBlockDuration = 20;
+    this.shieldDirection = direction;
+  }
+
+  startAttack() {
+    if (this.dead || this.sniperAiming || this.banditWindupTimer > 0 || this.attackCooldown > 0) return;
+    this.attackTimer = this.attackDuration;
+    this.attackCooldown = 42;
+    this.hasHit = false;
+  }
+
+  startBanditDash(target) {
+    this.queueBanditAction('dash', target);
+  }
+
+  performBanditDash(target) {
+    const dashDistance = 130;
+    const startX = this.x;
+    const endX = clamp(this.x + this.facing * dashDistance, 0, GAME_WIDTH - this.width);
+    const pathBox = {
+      x: Math.min(startX, endX),
+      y: this.y,
+      width: Math.abs(endX - startX) + this.width,
+      height: this.height,
+    };
+
+    this.x = endX;
+    this.velocity.x = this.facing * 4;
+
+    if (target && !target.dead && rectIntersect(pathBox, target.hitbox)) {
+      target.applyDamageToPart('torso', 8);
+      target.velocity.x = this.facing * 10;
+      target.velocity.y = -7;
+      hitEffects.push({ x: target.x + target.width / 2, y: target.y + target.height / 2, timer: 20, color: '#b6ff5f' });
+    }
+  }
+
+  startBanditBackstep() {
+    this.queueBanditAction('backstep');
+  }
+
+  performBanditBackstep() {
+    bombs.push({
+      x: this.x + this.width / 2,
+      y: this.y + this.height - 8,
+      radius: 90,
+      timer: 45,
+      owner: this,
+    });
+    this.x = clamp(this.x - this.facing * 100, 0, GAME_WIDTH - this.width);
+    this.velocity.x = -this.facing * 5;
+  }
+
+  queueBanditAction(action, target = null) {
+    if (
+      this.characterTypeKey !== 'stealthyBandit' ||
+      this.dead ||
+      this.attackCooldown > 0 ||
+      this.banditWindupTimer > 0
+    ) {
+      return;
+    }
+
+    this.banditPendingAction = { action, target };
+    this.banditWindupTimer = 20;
+    this.velocity.x = 0;
+  }
+
+  updateBanditWindup() {
+    if (this.banditWindupTimer <= 0) return;
+
+    this.banditWindupTimer -= 1;
+    this.velocity.x = 0;
+
+    if (this.banditWindupTimer > 0 || !this.banditPendingAction) return;
+
+    const { action, target } = this.banditPendingAction;
+    this.banditPendingAction = null;
+    if (action === 'dash') {
+      this.performBanditDash(target);
+    } else if (action === 'backstep') {
+      this.performBanditBackstep();
+    }
+  }
+
+  startSniperAim() {
+    if (this.characterTypeKey !== 'deadlySniper' || this.dead || this.sniperAiming) return;
+    this.sniperAiming = true;
+    this.velocity.x = 0;
+    this.sniperAim = {
+      x: clamp(this.x + this.width / 2 + this.facing * 220, 16, GAME_WIDTH - 16),
+      y: clamp(this.y + 30, 16, groundY - 16),
+    };
+  }
+
+  updateSniperAim() {
+    if (!this.sniperAiming) return;
+    const aimSpeed = 3;
+    if (keys[this.controls.left]) this.sniperAim.x -= aimSpeed;
+    if (keys[this.controls.right]) this.sniperAim.x += aimSpeed;
+    if (keys[this.controls.jump]) this.sniperAim.y -= aimSpeed;
+    if (keys[this.controls.attack]) this.sniperAim.y += aimSpeed;
+    this.sniperAim.x = clamp(this.sniperAim.x, 8, GAME_WIDTH - 8);
+    this.sniperAim.y = clamp(this.sniperAim.y, 8, groundY - 8);
+  }
+
+  stopSniperAim() {
+    if (this.characterTypeKey !== 'deadlySniper' || !this.sniperAiming) return false;
+    this.sniperAiming = false;
+    return true;
+  }
+
+  // compute part bounding boxes for hit detection
+  getPartBoxes() {
+    const centerX = this.x + this.width / 2;
+    const headY = this.y + 10;
+    const torsoTop = headY + 8;
+    const torsoBottom = torsoTop + 32;
+    const shoulderY = torsoTop + 4;
+    const shoulderOffset = 10;
+    const armLen = 24;
+    const legOffsetX = 8;
+    const legTop = torsoBottom;
+
+    return {
+      head: { x: centerX - 8, y: headY - 8, width: 16, height: 16, cx: centerX, cy: headY },
+      torso: { x: centerX - 11, y: torsoTop, width: 22, height: torsoBottom - torsoTop },
+      leftArm: { x: centerX - shoulderOffset - armLen, y: shoulderY - 3, width: armLen, height: 8 },
+      rightArm: { x: centerX + shoulderOffset, y: shoulderY - 3, width: armLen, height: 8 },
+      leftLeg: { x: centerX - legOffsetX - 4, y: legTop, width: 6, height: 24 },
+      rightLeg: { x: centerX + legOffsetX - 2, y: legTop, width: 6, height: 24 },
+    };
+  }
+
+  isAttackBlocked(attacker, attackBox) {
+    // Only Armored Knight can block
+    if (this.characterTypeKey !== 'armoredKnight' || !this.shieldActive) {
+      return false;
+    }
+    
+    const shieldDirection = this.shieldDirection;
+    
+    // Check if attack is coming from the correct side
+    const attackerX = attacker.x + attacker.width / 2;
+    const defenderX = this.x + this.width / 2;
+    const attackFromLeft = attackerX < defenderX;
+    
+    // Block left-side attacks with 'left' shield, right-side with 'right' shield
+    const isCorrectAngle = 
+      (shieldDirection === 'left' && attackFromLeft) ||
+      (shieldDirection === 'right' && !attackFromLeft);
+    
+    if (!isCorrectAngle) {
+      return false;
+    }
+    
+    // Take damage to shield instead of body parts
+    this.shieldHealth -= 2;
+    if (this.shieldHealth < 0) this.shieldHealth = 0;
+    
+    return true;
+  }
+
+  // color mapping for part health: white -> light red -> red -> dark red -> black
+  getPartColor(part) {
+    const p = this.parts[part];
+    if (!p) return '#ffffff';
+    const ratio = p.cur / p.max;
+    if (ratio >= 0.999) return '#ffffff';
+    if (ratio <= 0) return '#000000';
+
+    function lerpHex(a, b, t) {
+      const ah = parseInt(a.slice(1), 16);
+      const bh = parseInt(b.slice(1), 16);
+      const ar = (ah >> 16) & 0xff;
+      const ag = (ah >> 8) & 0xff;
+      const ab = ah & 0xff;
+      const br = (bh >> 16) & 0xff;
+      const bg = (bh >> 8) & 0xff;
+      const bb = bh & 0xff;
+      const rr = Math.round(ar + (br - ar) * t);
+      const rg = Math.round(ag + (bg - ag) * t);
+      const rb = Math.round(ab + (bb - ab) * t);
+      return '#' + ((1 << 24) + (rr << 16) + (rg << 8) + rb).toString(16).slice(1);
+    }
+
+    if (ratio > 0.66) {
+      return lerpHex('#ffffff', '#ffd6d6', (0.99 - ratio) / 0.33);
+    } else if (ratio > 0.33) {
+      return lerpHex('#ffd6d6', '#cc4d4d', (0.66 - ratio) / 0.33);
+    } else {
+      return lerpHex('#cc4d4d', '#000000', (0.33 - ratio) / 0.33);
+    }
+  }
+
+  applyDamageToPart(partName, dmg) {
+    const part = this.parts[partName];
+    if (!part) return;
+    const redirectParts = ['leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+    if (part.cur <= 0 && redirectParts.includes(partName)) {
+      this.distributeDamageFromBrokenPart(partName, dmg);
+    } else {
+      part.cur = Math.max(0, part.cur - dmg);
+    }
+
+    this.checkDeath();
+  }
+
+  distributeDamageFromBrokenPart(brokenPartName, dmg) {
+    const liveParts = Object.keys(this.parts).filter((partName) => {
+      return partName !== brokenPartName && this.parts[partName].cur > 0;
+    });
+    if (liveParts.length === 0) return;
+
+    const baseDamage = Math.floor(dmg / liveParts.length);
+    let remainder = +(dmg - baseDamage * liveParts.length).toFixed(2);
+
+    for (const partName of liveParts) {
+      this.parts[partName].cur = Math.max(0, this.parts[partName].cur - baseDamage);
+    }
+
+    const remainderTargets = [...liveParts];
+    while (remainder > 0.0001 && remainderTargets.length > 0) {
+      const index = Math.floor(Math.random() * remainderTargets.length);
+      const partName = remainderTargets.splice(index, 1)[0];
+      const extraDamage = Math.min(1, remainder);
+      this.parts[partName].cur = Math.max(0, +(this.parts[partName].cur - extraDamage).toFixed(2));
+      remainder = +(remainder - extraDamage).toFixed(2);
+    }
+  }
+
+  distributeDamageAcrossLiveParts(dmg) {
+    const liveParts = Object.keys(this.parts).filter((partName) => this.parts[partName].cur > 0);
+    if (liveParts.length === 0) return;
+
+    const baseDamage = Math.floor(dmg / liveParts.length);
+    let remainder = +(dmg - baseDamage * liveParts.length).toFixed(2);
+
+    for (const partName of liveParts) {
+      this.parts[partName].cur = Math.max(0, this.parts[partName].cur - baseDamage);
+    }
+
+    const remainderTargets = [...liveParts];
+    while (remainder > 0.0001 && remainderTargets.length > 0) {
+      const index = Math.floor(Math.random() * remainderTargets.length);
+      const partName = remainderTargets.splice(index, 1)[0];
+      const extraDamage = Math.min(1, remainder);
+      this.parts[partName].cur = Math.max(0, +(this.parts[partName].cur - extraDamage).toFixed(2));
+      remainder = +(remainder - extraDamage).toFixed(2);
+    }
+
+    this.checkDeath();
+  }
+
+  checkDeath() {
+    if (this.parts.head.cur <= 0 || this.parts.torso.cur <= 0) {
+      this.dead = true;
+    }
+  }
+
+  draw() {
+    if (this.dead) return;
+
+    // draw normal human-like sprite (head, torso, arms, legs)
+    const scale = this.characterTypeKey === 'armoredKnight' ? 1.227 : 1;
+    const centerX = this.x + this.width / 2;
+    const headY = this.y + 10 * scale;
+    const isArmoredKnight = this.characterTypeKey === 'armoredKnight';
+    const isDeadlySniper = this.characterTypeKey === 'deadlySniper';
+    const isStealthyBandit = this.characterTypeKey === 'stealthyBandit';
+    
+    // head
+    const headRadius = 8 * scale;
+    if (isArmoredKnight) {
+      // Armored helmet
+      ctx.fillStyle = '#888';
+      ctx.beginPath();
+      ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      ctx.fill();
+      // helmet visor
+      ctx.fillStyle = '#444';
+      ctx.fillRect(centerX - 5 * scale, headY - 2 * scale, 10 * scale, 3 * scale);
+      // eye slits
+      ctx.fillStyle = '#000';
+      ctx.fillRect(centerX - 4 * scale, headY - 2 * scale, 2 * scale, 2 * scale);
+      ctx.fillRect(centerX + 2 * scale, headY - 2 * scale, 2 * scale, 2 * scale);
+    } else {
+      // normal head
+      ctx.fillStyle = '#f1c27d';
+      ctx.beginPath();
+      ctx.arc(centerX, headY, headRadius, 0, Math.PI * 2);
+      ctx.fill();
+      // eyes
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(centerX - 5 * scale, headY - 3 * scale, 3 * scale, 3 * scale);
+      ctx.fillRect(centerX + 2 * scale, headY - 3 * scale, 3 * scale, 3 * scale);
+    }
+
+    // torso
+    const torsoW = 22 * scale;
+    const torsoH = 32 * scale;
+    const torsoX = centerX - torsoW / 2;
+    const torsoY = this.y + 18 * scale;
+    
+    if (isArmoredKnight) {
+      // Full armor - main plating
+      ctx.fillStyle = '#999';
+      ctx.fillRect(torsoX, torsoY, torsoW, torsoH);
+      // armor panels/details
+      ctx.fillStyle = '#777';
+      ctx.fillRect(torsoX, torsoY, torsoW, 8 * scale); // upper chest
+      ctx.fillRect(torsoX, torsoY + 16 * scale, torsoW, 8 * scale); // lower chest
+      // centerline details
+      ctx.fillStyle = '#555';
+      ctx.fillRect(centerX - 1 * scale, torsoY, 2 * scale, torsoH);
+    } else {
+      ctx.fillStyle = isDeadlySniper ? '#2f7d4f' : isStealthyBandit ? '#6b4aa0' : this.color;
+      ctx.fillRect(torsoX, torsoY, torsoW, torsoH);
+      if (isDeadlySniper) {
+        ctx.fillStyle = '#1f3f31';
+        ctx.fillRect(torsoX + 3 * scale, torsoY + 5 * scale, torsoW - 6 * scale, 5 * scale);
+      } else if (isStealthyBandit) {
+        ctx.fillStyle = '#241632';
+        ctx.fillRect(torsoX + 4 * scale, torsoY + 4 * scale, torsoW - 8 * scale, 6 * scale);
+      }
+    }
+
+    // legs
+    const legH = 24 * scale;
+    if (isArmoredKnight) {
+      ctx.fillStyle = '#777';
+    } else {
+      ctx.fillStyle = '#222';
+    }
+    ctx.fillRect(torsoX + 2 * scale, torsoY + torsoH, 6 * scale, legH);
+    ctx.fillRect(torsoX + torsoW - 8 * scale, torsoY + torsoH, 6 * scale, legH);
+
+    const armLength = 24 * scale;
+    const armY = torsoY + 6 * scale;
+    const shoulderX = this.facing > 0 ? torsoX + torsoW : torsoX;
+    const shoulderY = armY + 3 * scale;
+    ctx.save();
+    ctx.translate(shoulderX, shoulderY);
+    const restAngle = Math.PI * 35 / 180;
+    let angle = this.facing > 0 ? -restAngle : Math.PI + restAngle;
+    let weaponThrust = 0;
+    if (isDeadlySniper) {
+      angle = this.facing > 0 ? 0 : Math.PI;
+    }
+    if (this.attackTimer > 0) {
+      const progress = 1 - this.attackTimer / this.attackDuration;
+      if (isArmoredKnight || isDeadlySniper) {
+        if (isDeadlySniper) {
+          const recoil = Math.sin(progress * Math.PI) * Math.PI * 10 / 180;
+          angle = this.facing > 0 ? -recoil : Math.PI + recoil;
+        } else {
+          angle = this.facing > 0 ? 0 : Math.PI;
+        }
+        weaponThrust = isArmoredKnight ? Math.sin(progress * Math.PI) * 16 * scale : 0;
+      } else {
+        const swing = Math.PI * 50 / 180;
+        const startAngle = this.facing > 0 ? -swing : Math.PI + swing;
+        const endAngle = this.facing > 0 ? swing : Math.PI - swing;
+        angle = startAngle + (endAngle - startAngle) * progress;
+      }
+    }
+    ctx.rotate(angle);
+    if (isArmoredKnight) {
+      ctx.translate(weaponThrust, 0);
+    }
+    
+    if (isArmoredKnight) {
+      // Armored arm gauntlet
+      ctx.fillStyle = '#888';
+      ctx.fillRect(0, -3 * scale, armLength, 6 * scale);
+      ctx.fillStyle = '#666';
+      // gauntlet details
+      ctx.fillRect(0, -3 * scale, 4 * scale, 6 * scale);
+      ctx.fillRect(12 * scale, -3 * scale, 4 * scale, 6 * scale);
+    } else if (isDeadlySniper) {
+      // rifle arm
+      ctx.fillStyle = '#2f7d4f';
+      ctx.fillRect(0, -3 * scale, armLength, 6 * scale);
+      ctx.fillStyle = '#f1c27d';
+      ctx.fillRect(armLength, -3 * scale, 4 * scale, 6 * scale);
+    } else if (isStealthyBandit) {
+      ctx.fillStyle = '#6b4aa0';
+      ctx.fillRect(0, -3 * scale, armLength, 6 * scale);
+      ctx.fillStyle = '#f1c27d';
+      ctx.fillRect(armLength, -3 * scale, 4 * scale, 6 * scale);
+    } else {
+      // normal arm
+      ctx.fillStyle = this.color;
+      ctx.fillRect(0, -3 * scale, armLength, 6 * scale);
+      ctx.fillStyle = '#f1c27d';
+      ctx.fillRect(armLength, -3 * scale, 4 * scale, 6 * scale);
+    }
+
+    if (isArmoredKnight) {
+      // Dagger instead of sword
+      const daggerStart = armLength + 4 * scale;
+      // handle
+      ctx.fillStyle = '#6b4a2d';
+      ctx.fillRect(armLength - 6 * scale, -3 * scale, 6 * scale, 6 * scale);
+      // guard
+      ctx.fillStyle = '#444';
+      ctx.fillRect(armLength - 2 * scale, -5 * scale, 10 * scale, 3 * scale);
+      ctx.fillRect(armLength - 2 * scale, 2 * scale, 10 * scale, 3 * scale);
+      // blade
+      ctx.fillStyle = '#ccc';
+      ctx.beginPath();
+      ctx.moveTo(daggerStart, -2 * scale);
+      ctx.lineTo(daggerStart + 18 * scale, -1 * scale);
+      ctx.lineTo(daggerStart + 20 * scale, 0);
+      ctx.lineTo(daggerStart + 18 * scale, 1 * scale);
+      ctx.lineTo(daggerStart, 2 * scale);
+      ctx.closePath();
+      ctx.fill();
+      // blade fuller
+      ctx.strokeStyle = '#aaa';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(daggerStart + 4 * scale, 0);
+      ctx.lineTo(daggerStart + 18 * scale, 0);
+      ctx.stroke();
+    } else if (isDeadlySniper) {
+      // sniper rifle
+      const rifleStart = armLength - 6 * scale;
+      ctx.fillStyle = '#2b2b2b';
+      ctx.fillRect(rifleStart, -4 * scale, 44 * scale, 8 * scale);
+      ctx.fillStyle = '#555';
+      ctx.fillRect(rifleStart + 10 * scale, -8 * scale, 14 * scale, 4 * scale);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(rifleStart - 8 * scale, 0, 10 * scale, 6 * scale);
+      ctx.fillStyle = '#777';
+      ctx.fillRect(rifleStart + 38 * scale, -2 * scale, 16 * scale, 4 * scale);
+      if (this.attackTimer > this.attackDuration - 6) {
+        ctx.fillStyle = 'rgba(255, 235, 120, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(rifleStart + 58 * scale, 0);
+        ctx.lineTo(rifleStart + 72 * scale, -5 * scale);
+        ctx.lineTo(rifleStart + 72 * scale, 5 * scale);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else if (isStealthyBandit) {
+      // spiked club
+      const clubStart = armLength - 2 * scale;
+      ctx.fillStyle = '#5c3a24';
+      ctx.fillRect(armLength - 10 * scale, -3 * scale, 18 * scale, 6 * scale);
+      ctx.fillStyle = '#3a2520';
+      ctx.fillRect(clubStart, -5 * scale, 24 * scale, 10 * scale);
+      ctx.fillStyle = '#c9c9c9';
+      for (let i = 0; i < 4; i++) {
+        const spikeX = clubStart + (4 + i * 5) * scale;
+        ctx.beginPath();
+        ctx.moveTo(spikeX, -5 * scale);
+        ctx.lineTo(spikeX + 2 * scale, -10 * scale);
+        ctx.lineTo(spikeX + 4 * scale, -5 * scale);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(spikeX, 5 * scale);
+        ctx.lineTo(spikeX + 2 * scale, 10 * scale);
+        ctx.lineTo(spikeX + 4 * scale, 5 * scale);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else {
+      // sword for Sword Master
+      const swordStart = armLength + 4 * scale;
+      // handle
+      ctx.fillStyle = '#6b4a2d';
+      ctx.fillRect(armLength - 10 * scale, -3 * scale, 10 * scale, 6 * scale);
+      // guard
+      ctx.fillStyle = '#444';
+      ctx.fillRect(armLength - 2 * scale, -6 * scale, 18 * scale, 4 * scale);
+      ctx.fillRect(armLength - 2 * scale, 2 * scale, 18 * scale, 4 * scale);
+      // blade
+      ctx.fillStyle = '#ddd';
+      ctx.beginPath();
+      ctx.moveTo(swordStart + 4 * scale, -2 * scale);
+      ctx.lineTo(swordStart + 4 * scale, -2 * scale);
+      ctx.lineTo(swordStart + 36 * scale, -2 * scale);
+      ctx.lineTo(swordStart + 44 * scale, 0);
+      ctx.lineTo(swordStart + 36 * scale, 2 * scale);
+      ctx.lineTo(swordStart + 4 * scale, 2 * scale);
+      ctx.closePath();
+      ctx.fill();
+      // fuller line
+      ctx.strokeStyle = '#bbb';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(swordStart + 12 * scale, 0);
+      ctx.lineTo(swordStart + 34 * scale, 0);
+      ctx.stroke();
+      // pommel
+      ctx.fillStyle = '#6b4a2d';
+      ctx.fillRect(armLength - 14 * scale, -2 * scale, 4 * scale, 4 * scale);
+    }
+    ctx.restore();
+
+    // Draw shield for Armored Knight
+    if (this.characterTypeKey === 'armoredKnight') {
+      // Draw off-hand arm holding shield
+      this.drawOffHandArm();
+      this.drawShield();
+    }
+
+    if (this.attackBox) {
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      const box = this.attackBox;
+      ctx.fillRect(box.x, box.y, box.width, box.height);
+    }
+
+    if (this.sniperAiming) {
+      this.drawSniperCrosshair();
+    }
+
+    if (this.banditWindupTimer > 0) {
+      this.drawBanditWindup();
+    }
+  }
+
+  drawSniperCrosshair() {
+    const { x, y } = this.sniperAim;
+    ctx.save();
+    ctx.strokeStyle = '#ff4f4f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.moveTo(x - 18, y);
+    ctx.lineTo(x - 6, y);
+    ctx.moveTo(x + 6, y);
+    ctx.lineTo(x + 18, y);
+    ctx.moveTo(x, y - 18);
+    ctx.lineTo(x, y - 6);
+    ctx.moveTo(x, y + 6);
+    ctx.lineTo(x, y + 18);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawBanditWindup() {
+    const progress = 1 - this.banditWindupTimer / 20;
+    const x = this.x + this.width / 2;
+    const y = this.y + 12;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 226, 91, ${0.35 + progress * 0.45})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 10 + progress * 9, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawShield() {
+    const centerX = this.x + this.width / 2;
+    const scale = 1.227;
+    const idleShieldY = this.y + 12 * scale;
+    const guardShieldY = this.y + 4 * scale;
+    
+    const idleShieldDirection = this.getIdleShieldDirection();
+    const idleShieldX = idleShieldDirection === 'left'
+      ? this.x - 8 * scale 
+      : this.x + this.width + 8 * scale;
+    
+    // Shield dimensions
+    const shieldWidth = 16 * scale;
+    const shieldHeight = 24 * scale;
+    
+    // Shield color based on health
+    let shieldColor = '#4a9eff';
+    if (this.shieldHealth < 15) shieldColor = '#ffaa00';
+    if (this.shieldHealth <= 0) shieldColor = '#666';
+    
+    ctx.save();
+    
+    if (this.shieldGuardProgress > 0) {
+      // Active blocking position - shield guards the side the knight is facing.
+      const guardShieldX = this.shieldDirection === 'left'
+        ? centerX - shieldWidth - 5 * scale
+        : centerX + 5 * scale;
+      const blockX = idleShieldX + (guardShieldX - idleShieldX) * this.shieldGuardProgress;
+      const blockY = idleShieldY + (guardShieldY - idleShieldY) * this.shieldGuardProgress;
+      
+      ctx.fillStyle = shieldColor;
+      ctx.fillRect(blockX, blockY, shieldWidth, shieldHeight);
+      // Shield shine when blocking
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.fillRect(blockX + 2 * scale, blockY + 2 * scale, 4 * scale, 8 * scale);
+    } else if (this.shieldHealth > 0) {
+      // Idle position - on off-hand
+      ctx.fillStyle = shieldColor;
+      ctx.fillRect(idleShieldX, idleShieldY, shieldWidth, shieldHeight);
+      // Shield design - center cross
+      ctx.fillStyle = '#333';
+      ctx.fillRect(idleShieldX + 6 * scale, idleShieldY + 8 * scale, 4 * scale, 8 * scale);
+      ctx.fillRect(idleShieldX + 2 * scale, idleShieldY + 11 * scale, 12 * scale, 2 * scale);
+    }
+    
+    ctx.restore();
+  }
+
+  drawOffHandArm() {
+    const scale = 1.227;
+    const torsoW = 22 * scale;
+    const torsoX = this.x + this.width / 2 - torsoW / 2;
+    const torsoY = this.y + 18 * scale;
+    const armLength = 24 * scale;
+    const armY = torsoY + 6 * scale;
+    
+    // Off-hand arm on opposite side from facing
+    const isLeftArm = this.facing > 0; // Left arm when facing right
+    const shoulderX = isLeftArm ? torsoX : torsoX + torsoW;
+    const shoulderY = armY + 3 * scale;
+    
+    ctx.save();
+    ctx.translate(shoulderX, shoulderY);
+    
+    // Off-hand rests behind the body, then crosses forward while guarding.
+    const restAngle = Math.PI * 35 / 180;
+    const blockAngle = isLeftArm ? -Math.PI * 15 / 180 : Math.PI + Math.PI * 15 / 180;
+    const angle = this.shieldActive
+      ? blockAngle
+      : isLeftArm ? restAngle : Math.PI - restAngle;
+    
+    ctx.rotate(angle);
+    
+    // Armored arm gauntlet for off-hand
+    ctx.fillStyle = '#888';
+    ctx.fillRect(0, -3 * scale, armLength, 6 * scale);
+    ctx.fillStyle = '#666';
+    // gauntlet details
+    ctx.fillRect(0, -3 * scale, 4 * scale, 6 * scale);
+    ctx.fillRect(12 * scale, -3 * scale, 4 * scale, 6 * scale);
+    
+    ctx.restore();
+  }
+
+  // draw side HUD skeleton with per-part numeric labels at (sx, sy)
+  drawSideHUD(sx, sy) {
+    const cx = sx + (sx < GAME_WIDTH / 2 ? 38 : 32);
+    const headY = sy + 22;
+    const neckBottom = headY + 12;
+    const shoulderY = neckBottom + 8;
+    const chestBottom = shoulderY + 28;
+    const pelvisY = chestBottom + 16;
+
+    // skull
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = this.getPartColor('head');
+    ctx.beginPath();
+    ctx.arc(cx, headY, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    this.drawPartBar(cx + 14, headY + 4, 0, 0, 'head');
+
+    // neck
+    ctx.strokeStyle = '#999';
+    ctx.beginPath();
+    ctx.moveTo(cx, headY + 10);
+    ctx.lineTo(cx, neckBottom);
+    ctx.stroke();
+
+    // clavicles / shoulders
+    ctx.strokeStyle = '#888';
+    ctx.beginPath();
+    ctx.moveTo(cx - 18, shoulderY);
+    ctx.lineTo(cx + 18, shoulderY);
+    ctx.stroke();
+
+    // ribcage
+    ctx.strokeStyle = this.getPartColor('torso');
+    ctx.beginPath();
+    ctx.ellipse(cx, shoulderY + 16, 14, 22, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    this.drawPartBar(cx, shoulderY + 16, 0, 0, 'torso', 'center');
+
+    // pelvis
+    ctx.strokeStyle = '#777';
+    ctx.beginPath();
+    ctx.ellipse(cx, pelvisY, 11, 8, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // left arm
+    const leftShoulderX = cx - 16;
+    const leftShoulderY = shoulderY + 2;
+    const leftElbowX = leftShoulderX - 16;
+    const leftElbowY = leftShoulderY + 16;
+    const leftWristX = leftElbowX - 10;
+    const leftWristY = leftElbowY + 6;
+    ctx.strokeStyle = this.getPartColor('leftArm');
+    ctx.beginPath();
+    ctx.moveTo(leftShoulderX, leftShoulderY);
+    ctx.lineTo(leftElbowX, leftElbowY);
+    ctx.lineTo(leftWristX, leftWristY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('leftArm');
+    ctx.beginPath(); ctx.arc(leftShoulderX, leftShoulderY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftElbowX, leftElbowY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftWristX, leftWristY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(leftShoulderX - 18, leftShoulderY + 4, 0, 0, 'leftArm');
+
+    // right arm
+    const rightShoulderX = cx + 16;
+    const rightShoulderY = leftShoulderY;
+    const rightElbowX = rightShoulderX + 16;
+    const rightElbowY = rightShoulderY + 16;
+    const rightWristX = rightElbowX + 10;
+    const rightWristY = rightElbowY + 6;
+    ctx.strokeStyle = this.getPartColor('rightArm');
+    ctx.beginPath();
+    ctx.moveTo(rightShoulderX, rightShoulderY);
+    ctx.lineTo(rightElbowX, rightElbowY);
+    ctx.lineTo(rightWristX, rightWristY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('rightArm');
+    ctx.beginPath(); ctx.arc(rightShoulderX, rightShoulderY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightElbowX, rightElbowY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightWristX, rightWristY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(rightShoulderX + 10, rightShoulderY + 4, 0, 0, 'rightArm');
+
+    // left leg
+    const leftHipX = cx - 8;
+    const leftHipY = pelvisY + 6;
+    const leftKneeX = leftHipX - 8;
+    const leftKneeY = leftHipY + 22;
+    const leftAnkleX = leftKneeX - 6;
+    const leftAnkleY = leftKneeY + 18;
+    ctx.strokeStyle = this.getPartColor('leftLeg');
+    ctx.beginPath();
+    ctx.moveTo(leftHipX, leftHipY);
+    ctx.lineTo(leftKneeX, leftKneeY);
+    ctx.lineTo(leftAnkleX, leftAnkleY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('leftLeg');
+    ctx.beginPath(); ctx.arc(leftHipX, leftHipY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftKneeX, leftKneeY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(leftAnkleX, leftAnkleY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(leftKneeX - 16, leftKneeY - 4, 0, 0, 'leftLeg');
+
+    // right leg
+    const rightHipX = cx + 8;
+    const rightHipY = leftHipY;
+    const rightKneeX = rightHipX + 8;
+    const rightKneeY = leftKneeY;
+    const rightAnkleX = rightKneeX + 6;
+    const rightAnkleY = leftAnkleY;
+    ctx.strokeStyle = this.getPartColor('rightLeg');
+    ctx.beginPath();
+    ctx.moveTo(rightHipX, rightHipY);
+    ctx.lineTo(rightKneeX, rightKneeY);
+    ctx.lineTo(rightAnkleX, rightAnkleY);
+    ctx.stroke();
+    ctx.fillStyle = this.getPartColor('rightLeg');
+    ctx.beginPath(); ctx.arc(rightHipX, rightHipY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightKneeX, rightKneeY, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(rightAnkleX, rightAnkleY, 3, 0, Math.PI * 2); ctx.fill();
+    this.drawPartBar(rightKneeX + 10, rightKneeY - 4, 0, 0, 'rightLeg');
+  }
+
+  drawPartBar(x, y, w, h, partName, align = 'left') {
+    const p = this.parts[partName];
+    if (!p) return;
+    const label = formatHealth(p.cur);
+    ctx.font = '12px Inter, sans-serif';
+    ctx.fillStyle = this.getPartColor(partName);
+    ctx.textAlign = align;
+    ctx.fillText(label, x, y);
+  }
+
+  update() {
+    if (this.dead) {
+      this.velocity.x = 0;
+      if (this.attackTimer > 0) this.attackTimer -= 1;
+      if (this.attackCooldown > 0) this.attackCooldown -= 1;
+      return;
+    }
+
+    const controls = this.controls;
+    this.updateBanditWindup();
+
+    if (this.banditWindupTimer > 0) {
+      this.velocity.x = 0;
+      this.jumpHeld = true;
+    } else if (this.sniperAiming) {
+      this.velocity.x = 0;
+      this.updateSniperAim();
+    } else {
+      if (keys[controls.left]) {
+        this.velocity.x = Math.max(this.velocity.x - 0.4, -3.0);
+        this.facing = -1;
+      } else if (keys[controls.right]) {
+        this.velocity.x = Math.min(this.velocity.x + 0.4, 3.0);
+        this.facing = 1;
+      } else {
+        this.velocity.x *= friction;
+      }
+
+      if (keys[controls.jump] && this.onGround() && !this.jumpHeld) {
+        this.velocity.y = -18;
+        this.jumpHeld = true;
+        this.jumpApexY = this.y;
+        this.hasStartedJumpDescend = false;
+      }
+
+      if (!keys[controls.jump]) {
+        this.jumpHeld = false;
+      }
+
+      if (this.jumpApexY !== null) {
+        if (this.velocity.y < 0) {
+          this.jumpApexY = Math.min(this.jumpApexY, this.y);
+        } else if (this.velocity.y >= 0 && !this.onGround()) {
+          this.hasStartedJumpDescend = true;
+        }
+      }
+    }
+
+    // Shield blocking for Armored Knight
+    if (this.characterTypeKey === 'armoredKnight') {
+      if (this.shieldBlockDuration > 0) this.shieldBlockDuration -= 1;
+
+      if (keys[controls.ability] && this.shieldHealth > 0) {
+        this.activateShieldBlock(this.getFrontShieldDirection());
+      } else {
+        this.shieldActive = false;
+      }
+
+      const targetGuardProgress = this.shieldActive ? 1 : 0;
+      const guardStep = this.shieldActive ? 0.25 : 0.18;
+      if (this.shieldGuardProgress < targetGuardProgress) {
+        this.shieldGuardProgress = Math.min(targetGuardProgress, this.shieldGuardProgress + guardStep);
+      } else if (this.shieldGuardProgress > targetGuardProgress) {
+        this.shieldGuardProgress = Math.max(targetGuardProgress, this.shieldGuardProgress - guardStep);
+      }
+    }
+
+    if (keys[controls.attack] && this.attackCooldown <= 0) {
+      this.startAttack();
+    }
+
+    this.velocity.y += gravity;
+    const previousX = this.x;
+    const previousY = this.y;
+    this.x += this.velocity.x;
+    this.y += this.velocity.y;
+
+    if (this.x < 0) this.x = 0;
+    if (this.x + this.width > GAME_WIDTH) this.x = GAME_WIDTH - this.width;
+
+    let landedOnPlatform = false;
+    for (const platform of platforms) {
+      const overlapsX = this.x + this.width > platform.x && this.x < platform.x + platform.width;
+      const overlapsPreviousX = previousX + this.width > platform.x && previousX < platform.x + platform.width;
+      if (!overlapsX && !overlapsPreviousX) continue;
+
+      const previousBottom = previousY + this.height;
+      const currentBottom = this.y + this.height;
+      const previousTop = previousY;
+      const currentTop = this.y;
+
+      if (previousBottom <= platform.y && currentBottom >= platform.y && this.velocity.y >= 0) {
+        this.y = platform.y - this.height;
+        this.velocity.y = 0;
+        this.jumpApexY = null;
+        this.hasStartedJumpDescend = false;
+        landedOnPlatform = true;
+        break;
+      }
+
+      if (previousTop >= platform.y + platform.height && currentTop <= platform.y + platform.height && this.velocity.y < 0) {
+        this.y = platform.y + platform.height;
+        this.velocity.y = 0;
+        break;
+      }
+    }
+
+    if (!landedOnPlatform && this.y + this.height >= groundY) {
+      this.y = groundY - this.height;
+      this.velocity.y = 0;
+      this.jumpApexY = null;
+      this.hasStartedJumpDescend = false;
+    }
+
+    if (this.attackTimer > 0) {
+      this.attackTimer -= 1;
+    }
+
+    if (this.attackCooldown > 0) {
+      this.attackCooldown -= 1;
+    }
+  }
+
+  onGround() {
+    const onPlatform = platforms.some((platform) => {
+      return (
+        this.y + this.height >= platform.y - 0.5 &&
+        this.y + this.height <= platform.y + 0.5 &&
+        this.x + this.width > platform.x &&
+        this.x < platform.x + platform.width
+      );
+    });
+    return this.y + this.height >= groundY - 0.5 || onPlatform;
+  }
+
+  isCriticalHit() {
+    if (this.jumpApexY === null || !this.hasStartedJumpDescend || this.onGround()) {
+      return false;
+    }
+    const fallMidpoint = this.jumpApexY + (groundY - this.jumpApexY) / 2;
+    return this.y > fallMidpoint;
+  }
+}
+
+function getSelectedCharacterType(selectEl) {
+  return selectEl?.value || 'swordMaster';
+}
+
+function createPlayer(x, y, color, controls, typeKey) {
+  const characterTypeKey = getSelectedCharacterType({ value: typeKey });
+  return new Fighter(x, y - getFighterHeight(characterTypeKey), color, controls, characterTypeKey);
+}
+
+function setupPlayers() {
+  generatePlatforms();
+  bombs.length = 0;
+  hitEffects.length = 0;
+  const player1Type = getSelectedCharacterType(player1CharacterSelect);
+  const player2Type = getSelectedCharacterType(player2CharacterSelect);
+  player1 = new Fighter(120, groundY - getFighterHeight(player1Type), '#4ea6ff', player1Controls, player1Type);
+  player2 = new Fighter(760, groundY - getFighterHeight(player2Type), '#ff906d', player2Controls, player2Type);
+  updateHealthUI();
+  hideStartScreen();
+}
+
+function showStartScreen() {
+  startScreen.classList.remove('hidden');
+  canvas.classList.add('hidden');
+  statusBar.classList.add('hidden');
+  instructions.classList.add('hidden');
+}
+
+function hideStartScreen() {
+  startScreen.classList.add('hidden');
+  canvas.classList.remove('hidden');
+  statusBar.classList.remove('hidden');
+  instructions.classList.remove('hidden');
+}
+
+function rectIntersect(a, b) {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+function updateGame() {
+  if (player1 && player2) {
+    player1.update();
+    player2.update();
+    updateBombs();
+    detectAttacks();
+    updateHealthUI();
+  }
+}
+
+function updateBombs() {
+  for (let i = bombs.length - 1; i >= 0; i--) {
+    const bomb = bombs[i];
+    bomb.timer -= 1;
+    if (bomb.timer > 0) continue;
+
+    explodeBomb(bomb);
+    bombs.splice(i, 1);
+  }
+}
+
+function explodeBomb(bomb) {
+  const targets = [player1, player2].filter((player) => player && !player.dead);
+  for (const target of targets) {
+    const targetCenter = {
+      x: target.x + target.width / 2,
+      y: target.y + target.height / 2,
+    };
+    const distance = Math.hypot(targetCenter.x - bomb.x, targetCenter.y - bomb.y);
+    if (distance > bomb.radius) continue;
+
+    const falloff = 1 - distance / bomb.radius;
+    const damage = Math.max(1, +(20 * falloff).toFixed(1));
+    target.distributeDamageAcrossLiveParts(damage);
+    target.velocity.x += Math.sign(targetCenter.x - bomb.x || 1) * 6 * falloff;
+    target.velocity.y -= 8 * falloff;
+  }
+
+  hitEffects.push({ x: bomb.x, y: bomb.y, timer: 30, color: '#ff8a2a' });
+}
+
+function normalizeArmHit(hitPart) {
+  if (hitPart === 'leftArm' || hitPart === 'rightArm') {
+    return Math.random() < 0.5 ? 'leftArm' : 'rightArm';
+  }
+  return hitPart;
+}
+
+function getHitPartFromBox(target, attackBox) {
+  const parts = target.getPartBoxes();
+  const order = ['torso', 'head', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+  for (const name of order) {
+    if (rectIntersect(attackBox, parts[name])) {
+      return { hitPart: normalizeArmHit(name), parts };
+    }
+  }
+  return { hitPart: 'torso', parts };
+}
+
+function getHitPartFromPoint(target, point) {
+  const parts = target.getPartBoxes();
+  const order = ['head', 'torso', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+  for (const name of order) {
+    const box = parts[name];
+    if (
+      point.x >= box.x &&
+      point.x <= box.x + box.width &&
+      point.y >= box.y &&
+      point.y <= box.y + box.height
+    ) {
+      return { hitPart: normalizeArmHit(name), parts };
+    }
+  }
+  return { hitPart: null, parts };
+}
+
+function getAttackDamage(attacker, target, isCrit) {
+  if (attacker.characterTypeKey === 'deadlySniper') return 5;
+  const baseDamage = isCrit ? 8 : 4;
+  return Math.max(1, +(baseDamage * attacker.characterType.damageModifier * target.characterType.armorModifier).toFixed(1));
+}
+
+function applyTargetedHit(attacker, target, hitPart, parts, damage, effectColor = 'white') {
+  target.applyDamageToPart(hitPart, damage);
+  const bx = parts[hitPart];
+  const effectX = (bx.x + (bx.width || 0) / 2) || bx.cx;
+  const effectY = (bx.y + (bx.height || 0) / 2) || bx.cy;
+  hitEffects.push({ x: effectX, y: effectY, timer: 24, color: effectColor });
+}
+
+function fireSniperAbility(sniper, target) {
+  if (!sniper?.stopSniperAim()) return;
+  if (!target || target.dead) return;
+
+  const aimPoint = { ...sniper.sniperAim };
+  hitEffects.push({ x: aimPoint.x, y: aimPoint.y, timer: 18, color: '#ff4f4f' });
+  const { hitPart, parts } = getHitPartFromPoint(target, aimPoint);
+  if (!hitPart) return;
+
+  applyTargetedHit(sniper, target, hitPart, parts, 20, '#ff4f4f');
+}
+
+function detectAttacks() {
+  if (player1.dead || player2.dead) return;
+  const p1Attack = player1.attackBox;
+  const p2Attack = player2.attackBox;
+  if (
+    p1Attack &&
+    rectIntersect(p1Attack, player2.hitbox) &&
+    player1.attackTimer > 6 &&
+    !player1.hasHit
+  ) {
+    // Check if player2 is blocking
+    if (player2.isAttackBlocked(player1, p1Attack)) {
+      player1.hasHit = true;
+      hitEffects.push({ x: player2.x + player2.width / 2, y: player2.y + 10, timer: 12, color: '#00ff00' });
+      return;
+    }
+    
+    const isCrit = player1.characterTypeKey !== 'deadlySniper' && player1.isCriticalHit();
+    const damage = getAttackDamage(player1, player2, isCrit);
+    const { hitPart, parts } = getHitPartFromBox(player2, p1Attack);
+    player2.applyDamageToPart(hitPart, damage);
+    player2.velocity.x = (player1.characterTypeKey === 'deadlySniper' ? 7 : isCrit ? 16 : 12) * player1.facing;
+    player2.velocity.y = player1.characterTypeKey === 'deadlySniper' ? -6 : isCrit ? -12 : -10;
+    player1.hasHit = true;
+    const bx = parts[hitPart];
+    hitEffects.push({ x: (bx.x + (bx.width || 0) / 2) || bx.cx, y: (bx.y + (bx.height || 0) / 2) || bx.cy, timer: isCrit ? 30 : 18, color: isCrit ? 'gold' : 'white' });
+  }
+
+  if (
+    p2Attack &&
+    rectIntersect(p2Attack, player1.hitbox) &&
+    player2.attackTimer > 6 &&
+    !player2.hasHit
+  ) {
+    // Check if player1 is blocking
+    if (player1.isAttackBlocked(player2, p2Attack)) {
+      player2.hasHit = true;
+      hitEffects.push({ x: player1.x + player1.width / 2, y: player1.y + 10, timer: 12, color: '#00ff00' });
+      return;
+    }
+    
+    const isCrit = player2.characterTypeKey !== 'deadlySniper' && player2.isCriticalHit();
+    const damage = getAttackDamage(player2, player1, isCrit);
+    const { hitPart, parts } = getHitPartFromBox(player1, p2Attack);
+    player1.applyDamageToPart(hitPart, damage);
+    player1.velocity.x = (player2.characterTypeKey === 'deadlySniper' ? 7 : isCrit ? 16 : 12) * player2.facing;
+    player1.velocity.y = player2.characterTypeKey === 'deadlySniper' ? -6 : isCrit ? -12 : -10;
+    player2.hasHit = true;
+    const bx = parts[hitPart];
+    hitEffects.push({ x: (bx.x + (bx.width || 0) / 2) || bx.cx, y: (bx.y + (bx.height || 0) / 2) || bx.cy, timer: isCrit ? 30 : 18, color: isCrit ? 'gold' : 'white' });
+  }
+}
+
+function updateHealthUI() {
+  player1HealthEl.textContent = `Player 1 (${player1.characterName}) Health: ${formatHealth(player1.totalHealth())}`;
+  player2HealthEl.textContent = `Player 2 (${player2.characterName}) Health: ${formatHealth(player2.totalHealth())}`;
+}
+
+function drawStage() {
+  ctx.fillStyle = '#18222d';
+  ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  ctx.fillStyle = '#2a394a';
+  ctx.fillRect(stage.x, stage.y, stage.width, stage.height);
+
+  ctx.fillStyle = '#3d4f5f';
+  for (const platform of platforms) {
+    ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+    ctx.fillStyle = '#5d7d94';
+    ctx.fillRect(platform.x, platform.y, platform.width, 4);
+    ctx.fillStyle = '#3d4f5f';
+  }
+}
+
+function draw() {
+  if (player1 && player2) {
+    drawStage();
+    drawBombs();
+    player1.draw();
+    player2.draw();
+
+    // side HUDs showing skeletal part healths
+    player1.drawSideHUD(12, 12);
+    player2.drawSideHUD(GAME_WIDTH - 140, 12);
+
+    // draw hit effects
+    for (let i = hitEffects.length - 1; i >= 0; i--) {
+      const e = hitEffects[i];
+      const base = 30;
+      const alpha = Math.max(0, e.timer / base);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, (base - e.timer) * 0.7 + 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      e.timer -= 1;
+      if (e.timer <= 0) hitEffects.splice(i, 1);
+    }
+
+    if (player1.dead || player2.dead) {
+      const winner = player1.dead && !player2.dead ? 'Player 2' : player2.dead && !player1.dead ? 'Player 1' : 'Nobody';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
+      ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+      ctx.fillStyle = '#fff';
+      ctx.font = '46px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${winner} Wins!`, GAME_WIDTH / 2, GAME_HEIGHT / 2);
+      ctx.font = '18px Inter, sans-serif';
+      ctx.fillText('Press Restart to play again', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40);
+    }
+  }
+}
+
+function drawBombs() {
+  for (const bomb of bombs) {
+    ctx.save();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.arc(bomb.x, bomb.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 138, 42, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(bomb.x, bomb.y, bomb.radius * (1 - bomb.timer / 45), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#ff8a2a';
+    ctx.fillRect(bomb.x + 3, bomb.y - 11, 7, 3);
+    ctx.restore();
+  }
+}
+
+function loop() {
+  updateGame();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function usePrimaryAbility(user, target) {
+  user?.startSniperAim();
+  user?.startBanditDash(target);
+  user?.activateShieldBlock(user.getFrontShieldDirection());
+}
+
+function useSecondaryAbility(user) {
+  user?.startBanditBackstep();
+}
+
+window.addEventListener('keydown', (event) => {
+  if (keys.hasOwnProperty(event.code)) {
+    keys[event.code] = true;
+    if (event.code === player1?.controls.ability) usePrimaryAbility(player1, player2);
+    if (event.code === player2?.controls.ability) usePrimaryAbility(player2, player1);
+    if (event.code === player1?.controls.secondary) useSecondaryAbility(player1);
+    if (event.code === player2?.controls.secondary) useSecondaryAbility(player2);
+    if (event.code === player1?.controls.attack) player1.startAttack();
+    if (event.code === player2?.controls.attack) player2.startAttack();
+    event.preventDefault();
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (keys.hasOwnProperty(event.code)) {
+    if (event.code === player1?.controls.ability) fireSniperAbility(player1, player2);
+    if (event.code === player2?.controls.ability) fireSniperAbility(player2, player1);
+    keys[event.code] = false;
+    event.preventDefault();
+  }
+});
+
+playButton.addEventListener('click', () => {
+  setupPlayers();
+});
+
+restartButton.addEventListener('click', () => {
+  showStartScreen();
+});
+
+showStartScreen();
+requestAnimationFrame(loop);
