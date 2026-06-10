@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Showdown Arena</title>
+  <link rel="stylesheet" href="style.css?v=20260609-native-selects" />
+</head>
+<body>
+  <div class="game-shell">
+    <h1>Showdown Arena</h1>
+    <div id="startScreen" class="start-screen">
+      <h2>Select Your Characters</h2>
+      <div class="character-select start-character-select">
+        <div>
+          <label for="player1Character">Player 1:</label>
+          <select id="player1Character">
+            <option value="swordMaster">The Sword Master</option>
+            <option value="armoredKnight">The Armored Knight</option>
+            <option value="deadlySniper">The Deadly Sniper</option>
+            <option value="stealthyBandit">The Stealthy Bandit</option>
+            <option value="combatInfantry">The Belligerent Infantry</option>
+            <option value="magicalSorcerer">The Magical Sorcerer</option>
+            <option value="lethalHunter">The Lethal Hunter</option>
+            <option value="grimReaper">The Grim Reaper</option>
+          </select>
+        </div>
+        <div>
+          <label for="player2Character">Player 2:</label>
+          <select id="player2Character">
+            <option value="swordMaster">The Sword Master</option>
+            <option value="armoredKnight">The Armored Knight</option>
+            <option value="deadlySniper">The Deadly Sniper</option>
+            <option value="stealthyBandit">The Stealthy Bandit</option>
+            <option value="combatInfantry">The Belligerent Infantry</option>
+            <option value="magicalSorcerer">The Magical Sorcerer</option>
+            <option value="lethalHunter">The Lethal Hunter</option>
+            <option value="grimReaper">The Grim Reaper</option>
+          </select>
+        </div>
+      </div>
+      <button id="playButton">Play</button>
+    </div>
+    <div class="instructions">
+      <div>Player 1: A / D to move, W to jump, S to attack, Q for ability, R for secondary/reload</div>
+      <div>Player 2: Left / Right to move, Up to jump, Down to attack, / for ability, . for secondary/reload</div>
+    </div>
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+    <div class="status-bar">
+      <div id="player1Health">Player 1 Health: 100</div>
+      <div id="player2Health">Player 2 Health: 100</div>
+    </div>
+    <button id="restartButton">Restart</button>
+  </div>
+  <script src="script.js?v=20260610-original-speed-loop"></script>
+</body>
+</html>
