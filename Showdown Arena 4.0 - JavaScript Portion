@@ -1,0 +1,250 @@
+const cosmicEvents = [];
+const cosmicHazards = [];
+const sorcererClones = [];
+const hunterBolts = [];
+const hunterTraps = [];
+
+function getFighterHeight(characterTypeKey) {
+  if (characterTypeKey === 'armoredKnight') return 91;
+  if (characterTypeKey === 'combatInfantry' || characterTypeKey === 'grimReaper') return 82;
+  return 74;
+}
+
+function getFighterScale(characterTypeKey) {
+  if (characterTypeKey === 'armoredKnight') return 1.227;
+  if (characterTypeKey === 'combatInfantry' || characterTypeKey === 'grimReaper') return 1.1;
+  return 1;
+}
+
+function getPartHealthConfig(characterTypeKey) {
+  if (characterTypeKey === 'armoredKnight') {
+    return {
+      head: 35,
+      torso: 70,
+      limbs: 45,
+    };
+  }
+
+  if (characterTypeKey === 'deadlySniper' || characterTypeKey === 'grimReaper') {
+    return {
+      head: 15,
+      torso: 30,
+      limbs: 20,
+    };
+  }
+
+  if (characterTypeKey === 'magicalSorcerer') {
+    return {
+      head: 10,
+      torso: 20,
+      limbs: 15,
+    };
+  }
+
+  if (characterTypeKey === 'stealthyBandit' || characterTypeKey === 'lethalHunter') {
+    return {
+      head: 20,
+      torso: 40,
+      limbs: 25,
+    };
+  }
+
+  return {
+    head: 25,
+    torso: 50,
+    limbs: 35,
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function formatHealth(value) {
+  return Number.isInteger(value) ? `${value}` : value.toFixed(1);
+}
+
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function generatePlatforms() {
+  const nextPlatforms = [];
+  const targetCount = 3;
+  let attempts = 0;
+
+  while (nextPlatforms.length < targetCount && attempts < 120) {
+    attempts += 1;
+    const width = Math.round(randomBetween(135, 205));
+    const height = 16;
+    const x = Math.round(randomBetween(80, GAME_WIDTH - width - 80));
+    const y = Math.round(randomBetween(groundY - 185, groundY - 70));
+    const candidate = { x, y, width, height };
+    const overlaps = nextPlatforms.some((platform) => {
+      const horizontalGap = 55;
+      const verticalGap = 34;
+      return (
+        candidate.x < platform.x + platform.width + horizontalGap &&
+        candidate.x + candidate.width + horizontalGap > platform.x &&
+        candidate.y < platform.y + platform.height + verticalGap &&
+        candidate.y + candidate.height + verticalGap > platform.y
+      );
+    });
+
+    if (!overlaps) {
+      nextPlatforms.push(candidate);
+    }
+  }
+
+  while (nextPlatforms.length < targetCount) {
+    const fallbackIndex = nextPlatforms.length;
+    nextPlatforms.push({
+      x: 150 + fallbackIndex * 240,
+      y: groundY - 80 - fallbackIndex * 45,
+      width: 150,
+      height: 16,
+    });
+  }
+
+  platforms = nextPlatforms;
+}
+
+class Fighter {
+  constructor(x, y, color, controls, characterTypeKey = 'swordMaster') {
+    this.startX = x;
+    this.startY = y;
+    this.x = x;
+    this.y = y;
+    this.characterTypeKey = characterTypeKey;
+    // Armored Knight is larger
+    if (characterTypeKey === 'armoredKnight') {
+      this.width = 34;
+    } else {
+      this.width = 28;
+    }
+    this.height = getFighterHeight(characterTypeKey);
+    this.color = color;
+    this.velocity = { x: 0, y: 0 };
+    this.attackCooldown = 0;
+    this.attackTimer = 0;
+    this.hasHit = false;
+    this.jumpHeld = false;
+    this.jumpApexY = null;
+    this.hasStartedJumpDescend = false;
+    this.frozenTimer = 0;
+    this.trappedTimer = 0;
+    this.trapTickTimer = 0;
+    this.controls = controls;
+    this.facing = 1;
+    this.attackDuration = 30;
+    // Shield properties for Armored Knight
+    this.shieldActive = false;
+    this.shieldDirection = this.getIdleShieldDirection();
+    this.shieldHealth = 50;
+    this.shieldMaxHealth = 50;
+    this.shieldCooldown = 0;
+    this.shieldBlockDuration = 0;
+    this.shieldGuardProgress = 0;
+    this.sniperAiming = false;
+    this.sniperAim = { x: x + 160, y: y + 32 };
+    this.sniperMagazineSize = 5;
+    this.sniperAmmo = this.sniperMagazineSize;
+    this.sniperReloadTimer = 0;
+    this.abilityCooldown = 0;
+    this.secondaryCooldown = 0;
+    this.cosmicCollapseActive = false;
+    this.banditPendingAction = null;
+    this.banditWindupTimer = 0;
+    this.banditMovement = null;
+    this.rifleMagazineSize = 30;
+    this.rifleAmmo = this.rifleMagazineSize;
+    this.rifleFireCooldown = 0;
+    this.rifleReloadTimer = 0;
+    this.hunterFireCooldown = 0;
+    this.hunterBurstTimer = 0;
+    this.grimSoulTimer = 0;
+    this.grimSoulFireTimer = 0;
+    this.grimSouls = [];
+    this.grimSoulBeams = [];
+    this.slowedTimer = 0;
+    this.lastGrimSlowEffectTimer = 0;
+    this.setCharacterType(characterTypeKey);
+    this.initParts();
+  }
+  
+  // initialize body parts with max and current health
+  initParts() {
+    const health = getPartHealthConfig(this.characterTypeKey);
+    this.parts = {
+      head: { max: health.head, cur: health.head },
+      torso: { max: health.torso, cur: health.torso },
+      leftArm: { max: health.limbs, cur: health.limbs },
+      rightArm: { max: health.limbs, cur: health.limbs },
+      leftLeg: { max: health.limbs, cur: health.limbs },
+      rightLeg: { max: health.limbs, cur: health.limbs },
+    };
+    this.dead = false;
+  }
+
+  reset() {
+    this.x = this.startX;
+    this.y = this.startY;
+    this.velocity = { x: 0, y: 0 };
+    
+    this.attackCooldown = 0;
+    this.attackTimer = 0;
+    this.hasHit = false;
+    this.jumpHeld = false;
+    this.jumpApexY = null;
+    this.hasStartedJumpDescend = false;
+    this.frozenTimer = 0;
+    this.trappedTimer = 0;
+    this.trapTickTimer = 0;
+    this.shieldActive = false;
+    this.shieldDirection = this.getIdleShieldDirection();
+    this.shieldHealth = 50;
+    this.shieldCooldown = 0;
+    this.shieldBlockDuration = 0;
+    this.shieldGuardProgress = 0;
+    this.sniperAiming = false;
+    this.sniperAim = { x: this.x + 160, y: this.y + 32 };
+    this.sniperAmmo = this.sniperMagazineSize;
+    this.sniperReloadTimer = 0;
+    this.abilityCooldown = 0;
+    this.secondaryCooldown = 0;
+    this.cosmicCollapseActive = false;
+    this.banditPendingAction = null;
+    this.banditWindupTimer = 0;
+    this.banditMovement = null;
+    this.rifleAmmo = this.rifleMagazineSize;
+    this.rifleFireCooldown = 0;
+    this.rifleReloadTimer = 0;
+    this.hunterFireCooldown = 0;
+    this.hunterBurstTimer = 0;
+    this.grimSoulTimer = 0;
+    this.grimSoulFireTimer = 0;
+    this.grimSouls = [];
+    this.grimSoulBeams = [];
+    this.slowedTimer = 0;
+    this.lastGrimSlowEffectTimer = 0;
+    this.initParts();
+  }
+
+  setCharacterType(characterTypeKey) {
+    this.characterType = characterTypes[characterTypeKey] || characterTypes.swordMaster;
+    this.characterName = this.characterType.name;
+  }
+
+  getPrimaryAbilityCooldownMax() {
+    if (this.characterTypeKey === 'stealthyBandit') return BANDIT_ABILITY_COOLDOWN;
+    if (this.characterTypeKey === 'deadlySniper') return SNIPER_ABILITY_COOLDOWN;
+    if (this.characterTypeKey === 'combatInfantry') return INFANTRY_ABILITY_COOLDOWN;
+    if (this.characterTypeKey === 'magicalSorcerer') return SORCERER_ABILITY_COOLDOWN;
+    if (this.characterTypeKey === 'lethalHunter') return HUNTER_ABILITY_COOLDOWN;
+    if (this.characterTypeKey === 'grimReaper') return GRIM_REAPER_COOLDOWN;
+    return 0;
+  }
+
+  getSecondaryAbilityCooldownMax() {
+    if (this.characterTypeKey === 'stealthyBandit') return BANDIT_ABILITY_COOLDOWN;
+    if (this.characterTypeKey === 'lethalHunter') return HUNTER_ABILITY_COOLDOWN;
