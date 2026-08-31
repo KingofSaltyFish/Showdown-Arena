@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Showdown Arena</title>
+  <link rel="stylesheet" href="style.css?v=20260823-ai-difficulty-placement" />
+</head>
+<body>
+  <div class="game-shell">
+    <div id="progressionSummary" class="progression-summary" aria-live="polite"></div>
+    <div class="scoreboard" aria-label="Game controls">
+      <div id="player1Score" hidden></div>
+      <div class="scoreboard-actions"></div>
+      <div id="player2Score" hidden></div>
+    </div>
+    <div class="pause-controls" aria-label="Pause menu">
+      <button id="resetScoresButton" class="icon-button menu-reset-button" type="button" aria-label="Reset Progress" title="Reset Progress">↺</button>
+      <button id="pauseButton" class="icon-button pause-button" type="button" aria-expanded="false" aria-controls="pauseMenu" aria-label="Pause">⏸</button>
+      <div id="pauseMenu" class="pause-menu hidden">
+        <button id="restartButton" class="icon-button restart-menu-button" aria-label="Restart" title="Restart">↻</button>
+        <button id="volumeMenuButton" class="icon-button" type="button" aria-expanded="false" aria-controls="volumePanel" aria-label="Volume">🔊</button>
+        <div id="volumePanel" class="volume-panel hidden">
+          <input id="volumeSlider" type="range" min="0" max="100" value="100" aria-label="Volume" />
+        </div>
+      </div>
+    </div>
+    <div id="tournamentStatus" class="tournament-status" hidden>
+      <span id="tournamentStatusText"></span>
+    </div>
+    <button id="continueTournamentButton" class="tournament-continue-button" type="button" hidden>Continue</button>
+    <button id="returnMatchButton" class="match-return-button door-icon-button" type="button" aria-label="Exit Match" title="Exit Match" hidden>🚪</button>
+    <div id="liveAiDuelLeaderboardPanel" class="live-ai-duel-leaderboard-panel" hidden>
+      <div class="live-ai-duel-leaderboard-header">
+        <span>Live AI Duel Leaderboard</span>
+        <button id="closeLiveAiDuelLeaderboardButton" class="live-ai-duel-leaderboard-close" type="button" aria-label="Close leaderboard">×</button>
+      </div>
+      <div id="liveAiDuelLeaderboard" class="ai-duel-leaderboard live-ai-duel-leaderboard"></div>
+    </div>
+    <div id="aiDuelRoomOverlay" class="ai-duel-room-overlay" hidden></div>
+    <div id="characterActionPanel" class="character-action-panel hidden" role="dialog" aria-modal="true" aria-labelledby="characterActionTitle">
+      <div class="character-action-dialog">
+        <button id="characterActionCloseButton" class="character-action-close" type="button" aria-label="Close">×</button>
+        <h2 id="characterActionTitle">Character</h2>
+        <div class="character-action-buttons">
+          <button id="characterDescriptionButton" type="button">Check Description</button>
+          <button id="characterTutorialButton" type="button">Run Tutorial</button>
+          <button id="characterBackstoryButton" type="button">Back Story</button>
+        </div>
+      </div>
+    </div>
+    <div id="adminControlPanel" class="admin-control-panel hidden" role="dialog" aria-modal="true" aria-labelledby="adminControlPanelTitle">
+      <div class="admin-control-dialog">
+        <button id="adminControlPanelCloseButton" class="character-action-close" type="button" aria-label="Close">×</button>
+        <h2 id="adminControlPanelTitle">Character Control Panel</h2>
+        <p>Temporary balance changes only. Refreshing the page restores normal values.</p>
+        <label class="admin-control-character-select">
+          Character
+          <select id="adminControlCharacterSelect"></select>
+        </label>
+        <div id="adminControlFields" class="admin-control-fields"></div>
+        <div class="admin-control-actions">
+          <button id="adminControlApplyButton" type="button">Apply Temporary Changes</button>
+          <button id="adminControlResetButton" type="button">Reset Selected</button>
+          <button id="adminControlResetAllButton" type="button">Reset All</button>
+        </div>
+      </div>
+    </div>
+    <div id="tutorialOverlay" class="tutorial-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="tutorialTitle">
+      <div class="tutorial-dialog">
+        <div class="tutorial-kicker">First Battle Briefing</div>
+        <div id="characterIntroArt" class="character-intro-art" aria-hidden="true">
+          <canvas id="characterIntroCanvas" width="220" height="260"></canvas>
+        </div>
+        <h2 id="tutorialTitle">Welcome to Showdown Arena</h2>
+        <p id="tutorialText">Learn the controls and core mechanics before the first match.</p>
+        <div id="tutorialProgress" class="tutorial-progress">Step 1 of 6</div>
+        <div class="tutorial-actions">
+          <button id="tutorialBackButton" type="button">Back</button>
+          <button id="tutorialSkipButton" type="button">Skip</button>
+          <button id="tutorialNextButton" type="button">Next</button>
+        </div>
+      </div>
+    </div>
+    <div id="startScreen" class="start-screen">
+      <div id="startLogoPanel" class="start-logo-panel" aria-label="Showdown Arena logo">
+        <div id="startLogoLeftCast" class="start-logo-cast left-cast" aria-hidden="true"></div>
+        <div class="start-logo-title">
+          <div class="start-logo-kicker">Welcome To</div>
+          <div class="start-logo-main">Showdown Arena</div>
+          <div class="start-logo-subtitle">Unlock. Draft. Duel. Survive.</div>
+        </div>
+        <div id="startLogoRightCast" class="start-logo-cast right-cast" aria-hidden="true"></div>
+      </div>
+      <button id="showAdminUnlockButton" class="admin-unlock-toggle" type="button">Admin Unlock</button>
+      <div class="admin-character-unlock" hidden>
+        <input id="adminPassword" type="password" inputmode="numeric" placeholder="Admin password" autocomplete="off" />
+        <button id="adminUnlockButton" type="button">Unlock All</button>
+        <div id="adminPasswordStatus" aria-live="polite"></div>
+      </div>
+      <div class="game-mode-actions main-menu-actions">
+        <div class="main-menu-row">
+          <button id="playButton">Play vs AI</button>
+          <button id="aiPlayButton" type="button">Play vs Human</button>
+        </div>
+        <div class="main-menu-row">
+          <button id="tournamentButton" type="button">Tournament Mode</button>
+          <button id="bossModeButton" type="button">Boss Mode</button>
+        </div>
+        <div class="main-menu-row">
+          <button id="recreationalModesButton" type="button">Recreational Modes</button>
+        </div>
+        <div class="main-menu-row main-menu-admin-row">
+          <button id="aiDuelButton" class="admin-only-button" type="button" hidden>AI Duel Test</button>
+          <button id="adminControlPanelButton" class="admin-only-button" type="button" hidden>Character Control Panel</button>
+        </div>
+      </div>
+      <div class="progression-actions" aria-label="Collection and progression">
+        <button id="rosterButton" type="button">Roster / Shards</button>
+      </div>
+    </div>
+    <div id="humanCharacterScreen" class="start-screen human-character-screen hidden">
+      <h2>Select Your Characters</h2>
+      <div id="startCharacterSelect" class="character-select start-character-select">
+        <div>
+          <label for="player1Character">Player 1:</label>
+          <select id="player1Character">
+            <option value="swordMaster">The Master Swordman</option>
+            <option value="armoredKnight">The Armored Knight</option>
+            <option value="deadlySniper">The Deadly Sniper</option>
+            <option value="combatInfantry">The Belligerent Infantry</option>
+            <option value="stealthyBandit">The Stealthy Bandit</option>
+            <option value="furtiveSpy">The Furtive Spy</option>
+            <option value="lethalHunter">The Lethal Hunter</option>
+            <option value="magicalSorcerer">The Magical Sorcerer</option>
+            <option value="ashEngineer">The Ash Engineer</option>
+            <option value="valiantGunner">The Valiant Gunner</option>
+            <option value="grimReaper">The Grim Reaper</option>
+            <option value="royalPrince">The Royal Prince</option>
+            <option value="frostValkyrie">The Frost Valkyrie</option>
+            <option value="abyssalDemon">The Abyssal Demon</option>
+            <option value="stormRonin">The Storm Ronin</option>
+            <option value="celestialArcher">The Celestial Archer</option>
+          </select>
+        </div>
+        <div id="aiDifficultyField" hidden>
+          <label for="aiDifficulty">AI Difficulty:</label>
+          <select id="aiDifficulty">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div>
+          <label id="player2CharacterLabel" for="player2Character">Player 2 / AI:</label>
+          <select id="player2Character">
+            <option value="swordMaster">The Master Swordman</option>
+            <option value="armoredKnight">The Armored Knight</option>
+            <option value="deadlySniper">The Deadly Sniper</option>
+            <option value="combatInfantry">The Belligerent Infantry</option>
+            <option value="stealthyBandit">The Stealthy Bandit</option>
+            <option value="furtiveSpy">The Furtive Spy</option>
+            <option value="lethalHunter">The Lethal Hunter</option>
+            <option value="magicalSorcerer">The Magical Sorcerer</option>
+            <option value="ashEngineer">The Ash Engineer</option>
+            <option value="valiantGunner">The Valiant Gunner</option>
+            <option value="grimReaper">The Grim Reaper</option>
+            <option value="royalPrince">The Royal Prince</option>
+            <option value="frostValkyrie">The Frost Valkyrie</option>
+            <option value="abyssalDemon">The Abyssal Demon</option>
+            <option value="stormRonin">The Storm Ronin</option>
+            <option value="celestialArcher">The Celestial Archer</option>
+          </select>
+        </div>
+      </div>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="startHumanMapButton" type="button">Choose Map</button>
+        <button id="backFromHumanCharacterButton" type="button">Back</button>
+      </div>
+    </div>
+    <div id="aiDuelScreen" class="start-screen ai-duel-screen hidden">
+      <h2>AI Duel Test</h2>
+      <p>Admin-only balance testing. Two bots use the selected difficulty, random characters, and the default map. No rewards.</p>
+      <div class="ai-duel-actions">
+        <button id="startAiDuelButton" type="button">Start 10 AI Rooms</button>
+        <button id="resetAiDuelStatsButton" type="button">Reset Leaderboard</button>
+      </div>
+      <div id="aiDuelRooms" class="ai-duel-rooms" aria-label="AI duel rooms"></div>
+      <div id="aiDuelLeaderboard" class="ai-duel-leaderboard"></div>
+      <button id="backFromAiDuelButton" type="button">Back</button>
+    </div>
+    <div id="recreationalModesScreen" class="start-screen recreational-modes-screen hidden">
+      <h2>Recreational Modes</h2>
+      <p>For-fun modes with no rewards.</p>
+      <div class="game-mode-actions">
+        <button id="speedMadnessButton" type="button">Speed Madness</button>
+        <button id="damageManiaButton" type="button">Damage Mania</button>
+        <button id="kingPlatformMenuButton" type="button">King of the Platform</button>
+        <button id="huntedModeMenuButton" type="button">Hunted Mode</button>
+        <button id="borderShrinkMenuButton" type="button">Border Shrink</button>
+        <button id="swapModeMenuButton" type="button">SWAP!</button>
+        <button id="oneVsAllMenuButton" type="button">One vs All</button>
+        <button id="draftModeMenuButton" type="button">Draft Mode</button>
+      </div>
+      <button id="backFromRecreationalModesButton" type="button">Back</button>
+    </div>
+    <div id="speedMadnessScreen" class="start-screen speed-madness-screen hidden">
+      <h2>Speed Madness</h2>
+      <p>Choose how fast the whole match simulation runs. No rewards.</p>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="halfSpeedButton" type="button">Half Speed</button>
+        <button id="doubleSpeedButton" type="button">Double Speed</button>
+        <button id="tripleSpeedButton" type="button">Triple Speed - 100,000 Gold</button>
+        <button id="randomSpeedButton" type="button">Random Speed - 200,000 Gold</button>
+      </div>
+      <button id="backFromSpeedMadnessButton" type="button">Back</button>
+    </div>
+    <div id="damageManiaScreen" class="start-screen damage-mania-screen hidden">
+      <h2>Damage Mania</h2>
+      <p>Choose how hard every hit lands. No rewards.</p>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="halfDamageButton" type="button">Half Damage</button>
+        <button id="doubleDamageButton" type="button">Double Damage</button>
+        <button id="tripleDamageButton" type="button">Triple Damage - 100,000 Gold</button>
+        <button id="oneTapButton" type="button">One Tap - 200,000 Gold</button>
+      </div>
+      <button id="backFromDamageManiaButton" type="button">Back</button>
+    </div>
+    <div id="kingPlatformScreen" class="start-screen arena-rules-screen hidden">
+      <h2>King of the Platform</h2>
+      <p>Hold the glowing platform zone alone to score. First player to fill the score wins. No rewards.</p>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="startKingPlatformButton" type="button">Start King of the Platform</button>
+      </div>
+      <button id="backFromKingPlatformButton" type="button">Back</button>
+    </div>
+    <div id="huntedModeScreen" class="start-screen arena-rules-screen hidden">
+      <h2>Hunted Mode</h2>
+      <p>One player becomes the hunted and must survive while the hunter tries to catch them. No rewards.</p>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="startHuntedModeButton" type="button">Start Hunted Mode</button>
+      </div>
+      <button id="backFromHuntedModeButton" type="button">Back</button>
+    </div>
+    <div id="borderShrinkScreen" class="start-screen arena-rules-screen hidden">
+      <h2>Border Shrink</h2>
+      <p>The arena slowly squeezes inward, forcing both players into a tighter fight. No rewards.</p>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="startBorderShrinkButton" type="button">Horizontal Shrink</button>
+        <button id="startVerticalBorderShrinkButton" type="button">Vertical Shrink</button>
+      </div>
+      <button id="backFromBorderShrinkButton" type="button">Back</button>
+    </div>
+    <div id="swapModeScreen" class="start-screen arena-rules-screen hidden">
+      <h2>SWAP!</h2>
+      <p>Grab random gear mid-fight. Only three pickups can exist at once, and there are no rewards.</p>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="startWeaponSwapButton" type="button">Weapon Swap</button>
+        <button id="startAbilitySwapButton" type="button">Ability Swap</button>
+      </div>
+      <button id="backFromSwapModeButton" type="button">Back</button>
+    </div>
+    <div id="oneVsAllScreen" class="start-screen arena-rules-screen hidden">
+      <h2>One vs All</h2>
+      <p>Pick the 10x-health solo fighter first. When the match starts, fate decides whether that solo fighter appears on the left or right. The solo fights every other character one at a time. No rewards.</p>
+      <div class="character-select one-vs-all-character-select">
+        <label for="oneVsAllCharacterSelect">Your Character:</label>
+        <select id="oneVsAllCharacterSelect"></select>
+      </div>
+      <div class="game-mode-actions recreational-mode-actions">
+        <button id="startOneVsAllButton" type="button">Start One vs All</button>
+      </div>
+      <button id="backFromOneVsAllButton" type="button">Back</button>
+    </div>
+    <div id="draftModeScreen" class="start-screen draft-mode-screen hidden">
+      <h2>Draft Mode</h2>
+      <p id="draftModePrompt">Each player drafts twice from 2 random cards, then chooses the final fighter from their 2 drafted picks. No rewards.</p>
+      <div id="draftModeBoard" class="draft-mode-board" aria-live="polite"></div>
+      <button id="backFromDraftModeButton" type="button">Back</button>
+    </div>
+    <div id="rosterScreen" class="start-screen roster-screen hidden">
+      <h2>Roster & Shards</h2>
+      <p id="rosterGoldText">Gold: 0</p>
+      <div id="rarityShop" class="rarity-shop" aria-label="Shard shop"></div>
+      <div id="rosterGrid" class="roster-grid"></div>
+      <div class="roster-actions">
+        <button id="backFromRosterButton" type="button">Back</button>
+      </div>
+    </div>
+    <div id="mapChoiceScreen" class="start-screen map-choice-screen hidden">
+      <canvas id="mapPreviewCanvas" class="map-preview-canvas" width="960" height="540" aria-hidden="true"></canvas>
+      <h2>Choose Your Map</h2>
+      <p id="mapChoiceModeText">Pick the arena for this match.</p>
+      <div class="map-select">
+        <label for="mapSelect">Map:</label>
+        <select id="mapSelect">
+          <option value="classic" selected>Classic</option>
+          <option value="river">The River</option>
+          <option value="forest">The Forest</option>
+          <option value="city">The City</option>
+          <option value="ocean">The Ocean</option>
+          <option value="volcano">The Volcano</option>
+        </select>
+      </div>
+      <div class="map-choice-actions">
+        <button id="startMapMatchButton" type="button">Start Match</button>
+        <button id="backFromMapChoiceButton" type="button">Back</button>
+      </div>
+    </div>
+    <div id="tournamentOpponentScreen" class="start-screen tournament-opponent-screen hidden">
+      <h2>Choose Tournament Opponent</h2>
+      <p>AI tournaments cost 10,000 gold. Human tournaments are free. Beat the series to earn random shards based on difficulty and final score.</p>
+      <div class="tournament-opponent-actions">
+        <button id="humanTournamentButton" type="button">Play vs Human</button>
+        <button id="aiTournamentButton" type="button">Play vs AI</button>
+      </div>
+      <div class="tournament-ai-options">
+        <label for="tournamentAiDifficulty">AI Difficulty:</label>
+        <select id="tournamentAiDifficulty">
+          <option value="easy">Easy</option>
+          <option value="normal" selected>Medium</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      <button id="backFromTournamentChoiceButton" class="tournament-choice-back" type="button">Back</button>
+    </div>
+    <div id="bossFormationScreen" class="start-screen boss-formation-screen hidden">
+      <h2>Boss Mode: Triangle Formation</h2>
+      <p>Pick your squad. The AI controls movement and basic attacks; you control abilities with Q and R. Press 1-5 during battle to choose whose ability you command.</p>
+      <div class="boss-level-card">
+        <strong>Boss Level Map</strong>
+        <div id="bossLevelMap" class="boss-level-map" aria-label="Boss level map"></div>
+        <span id="bossLevelDescription">A living tree monster with crushing ground attacks and binding vines.</span>
+      </div>
+      <div id="bossFormationSlots" class="boss-draft-container"></div>
+      <div class="boss-choice-actions">
+        <button id="startBossModeButton" type="button">Start Boss Fight</button>
+        <button id="backFromBossModeButton" type="button">Back</button>
+      </div>
+    </div>
+    <div class="arena-top-actions">
+      <button id="liveAiDuelLeaderboardButton" class="live-ai-duel-leaderboard-button" type="button" aria-expanded="false" aria-controls="liveAiDuelLeaderboardPanel" hidden>Leaderboard</button>
+    </div>
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+    <div class="status-bar">
+      <div class="status-side status-side-left">
+        <div id="player1Health">Player 1 Health: 100</div>
+      </div>
+      <div class="status-side status-side-right">
+        <div id="player2Health">Player 2 Health: 100</div>
+      </div>
+    </div>
+  </div>
+  <script src="script.js?v=20260823-ai-difficulty-placement"></script>
+</body>
+</html>
